@@ -1,4 +1,4 @@
-# Job Answer Studio
+# Job Tooling
 
 A multi-tab web UI that drafts job-application answers with Claude Code (Sonnet,
 medium reasoning) instances, grounded in your Obsidian vault, then humanizes them.
@@ -87,8 +87,16 @@ Everything is configurable, globally and per-tab:
 - `config.json` — saved global settings (gitignored)
 - `.sessions.json` — tab → Claude Code session id map (gitignored)
 
+## Appearance
+The UI ships a polished design system: OKLCH-token theming with **dark** (default)
+and **light** modes (☾/☀ in the header), a **compact density** toggle (▢/▣),
+**split view** (◫) for two panes side by side, a **fun mode** (✨) with cyclable
+animated backgrounds, status pills, segmented chips, and a live status bar.
+Preferences persist across reloads. See [`docs/design.md`](docs/design.md).
+
 ## Documentation
 High-level docs live in [`docs/`](docs/):
 - [`docs/README.md`](docs/README.md) — what this is, at a glance
 - [`docs/architecture.md`](docs/architecture.md) — how a request becomes an answer
 - [`docs/rag.md`](docs/rag.md) — the RAG retrieval feature
+- [`docs/design.md`](docs/design.md) — the design system and theming

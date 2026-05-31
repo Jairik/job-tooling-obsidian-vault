@@ -157,4 +157,4 @@ const server = Bun.serve({
   },
 });
 
-console.log(`\n  Job Answer Studio → http://localhost:${server.port}\n`);
+console.log(`\n  Job Tooling → http://localhost:${server.port}\n`);

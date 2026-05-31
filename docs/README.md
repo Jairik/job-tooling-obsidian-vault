@@ -1,4 +1,4 @@
-# Job Answer Studio — Documentation
+# Job Tooling — Documentation
 
 High-level docs for what this project is and how it works. For setup and the
 quickstart, see the top-level [`../README.md`](../README.md).
@@ -30,6 +30,7 @@ UI and a small JSON + SSE API, and drives the model.
 
 - [architecture.md](architecture.md) — how a request flows from the UI to an answer.
 - [rag.md](rag.md) — the RAG retrieval feature and the **RAG** toggle.
+- [design.md](design.md) — the design system, tokens, theming, and components.
 
 ## Key ideas
 

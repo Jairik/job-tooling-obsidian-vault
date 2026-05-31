@@ -31,12 +31,26 @@ export function AnswerStream({ phase, draft, answer, notice, error }: Props) {
     setTimeout(() => setCopied(false), 1200);
   };
 
+  // Map the current phase onto a status pill tone.
+  const pillClass =
+    phase === "done" ? "pill pill--success" : phase === "error" ? "pill pill--danger" : "pill";
+  const dotClass = phase === "done" ? "dot ok" : phase === "error" ? "dot bad" : "dot";
+
   return (
-    <div className="answer">
-      <div className="answer-head">
-        <span className={`phase-badge phase-${phase}`}>
-          {running && <span className="spinner" />}
-          {PHASE_LABEL[phase]}
+    <div className="card answer">
+      <div className="card-h answer-head">
+        <span className={pillClass}>
+          {running ? (
+            <span className="phase-spin">
+              <span className="spinner" />
+              {PHASE_LABEL[phase]}
+            </span>
+          ) : (
+            <>
+              <span className={dotClass} />
+              {PHASE_LABEL[phase] || "ready"}
+            </>
+          )}
         </span>
         {(answer || draft) && (
           <button className="copy-btn" onClick={copy}>
@@ -45,28 +59,30 @@ export function AnswerStream({ phase, draft, answer, notice, error }: Props) {
         )}
       </div>
 
-      {notice && <div className="notice">{notice}</div>}
-      {error && <div className="error-box">{error}</div>}
+      <div className="card-b">
+        {notice && <div className="notice">{notice}</div>}
+        {error && <div className="error-box">{error}</div>}
 
-      <div className="answer-text">
-        {display ? (
-          <>
-            {display}
-            {running && <span className="caret" />}
-          </>
-        ) : (
-          !error && <span className="placeholder">The grounded, humanized answer will appear here.</span>
+        <div className="answer-text">
+          {display ? (
+            <>
+              {display}
+              {running && <span className="caret" />}
+            </>
+          ) : (
+            !error && <span className="placeholder">The grounded, humanized answer will appear here.</span>
+          )}
+        </div>
+
+        {phase !== "draft" && draft && answer && (
+          <div className="draft-box">
+            <button className="draft-toggle" onClick={() => setShowDraft((s) => !s)}>
+              {showDraft ? "▾" : "▸"} Original draft (pre-humanize)
+            </button>
+            {showDraft && <div className="draft-text">{draft}</div>}
+          </div>
         )}
       </div>
-
-      {phase !== "draft" && draft && answer && (
-        <div className="draft-box">
-          <button className="draft-toggle" onClick={() => setShowDraft((s) => !s)}>
-            {showDraft ? "▾" : "▸"} Original draft (pre-humanize)
-          </button>
-          {showDraft && <div className="draft-text">{draft}</div>}
-        </div>
-      )}
     </div>
   );
 }

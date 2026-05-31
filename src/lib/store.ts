@@ -138,8 +138,8 @@ export function deriveTitleLocal(jobDescription: string, question: string): stri
   return t.charAt(0).toUpperCase() + t.slice(1);
 }
 
-const TABS_KEY = "jas.tabs.v1";
-const SETTINGS_KEY = "jas.settings.v1";
+const TABS_KEY = "jt.tabs.v1";
+const SETTINGS_KEY = "jt.settings.v1";
 
 export function uid(): string {
   return crypto.randomUUID();

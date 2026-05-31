@@ -38,9 +38,17 @@ export function TabView({ tab, globalSettings, models, engines, skills, onPatch,
 
   return (
     <div className="tabview">
-      <div className="inputs">
+      <div className="card inputs">
+        <div className="card-h">
+          <h2>New answer</h2>
+          <span className="hint">grounded in your vault</span>
+        </div>
+        <div className="card-b">
         <label className="field">
-          <span>Job description</span>
+          <div className="field-head">
+            <span>Job description</span>
+            <span className="aux">optional</span>
+          </div>
           <textarea
             rows={6}
             placeholder="Paste the job description (optional but recommended)…"
@@ -50,7 +58,10 @@ export function TabView({ tab, globalSettings, models, engines, skills, onPatch,
         </label>
 
         <label className="field">
-          <span>Question</span>
+          <div className="field-head">
+            <span>Question</span>
+            <span className="aux">required</span>
+          </div>
           <textarea
             rows={3}
             placeholder="The specific application question to answer…"
@@ -60,25 +71,25 @@ export function TabView({ tab, globalSettings, models, engines, skills, onPatch,
         </label>
 
         <div className="controls">
-          <label className="yc">
+          <label className="chip">
             <input type="checkbox" checked={tab.yc} onChange={(e) => onPatch({ yc: e.target.checked })} />
             <span>YC</span>
-            {tab.yc && !skills.yc && <span className="yc-note">skill not found — will generate normally</span>}
+            {tab.yc && !skills.yc && <span className="chip-note warn">skill not found</span>}
           </label>
 
-          <label className="yc" title="Retrieve only the most relevant vault excerpts instead of reading the whole vault — fewer tokens.">
+          <label className="chip" title="Retrieve only the most relevant vault excerpts instead of reading the whole vault — fewer tokens.">
             <input type="checkbox" checked={tab.rag} onChange={(e) => onPatch({ rag: e.target.checked })} />
             <span>RAG</span>
-            {tab.rag && <span className="rag-note">retrieval · fewer tokens</span>}
+            {tab.rag && <span className="chip-note muted">fewer tokens</span>}
           </label>
 
-          <label className="override-toggle">
+          <label className="chip">
             <input
               type="checkbox"
               checked={tab.overrideEnabled}
               onChange={(e) => toggleOverride(e.target.checked)}
             />
-            <span>Override settings</span>
+            <span>Override</span>
           </label>
 
           <div className="spacer" />
@@ -141,6 +152,7 @@ export function TabView({ tab, globalSettings, models, engines, skills, onPatch,
             </label>
           </div>
         )}
+        </div>
       </div>
 
       <AnswerStream phase={tab.phase} draft={tab.draft} answer={tab.answer} notice={tab.notice} error={tab.error} />

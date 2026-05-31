@@ -92,7 +92,7 @@ export function SettingsPanel({ settings, models, engines, skills, onChange, onC
           </>
         )}
 
-        <label className="field-row">
+        <label className="toggle-row">
           <input
             type="checkbox"
             checked={settings.humanize}
@@ -104,7 +104,7 @@ export function SettingsPanel({ settings, models, engines, skills, onChange, onC
           <div className="notice small">humanizer skill not found in ~/.claude/skills or the vault.</div>
         )}
 
-        <label className="field-row">
+        <label className="toggle-row">
           <input
             type="checkbox"
             checked={settings.rag}
