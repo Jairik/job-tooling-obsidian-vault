@@ -13,10 +13,11 @@ interface Props {
   onPatch: (patch: Partial<Tab>) => void;
   onGenerate: () => void;
   onFollowUp: (text: string) => void;
+  onNewQuestion: () => void;
   onCancel: () => void;
 }
 
-export function TabView({ tab, globalSettings, models, engines, skills, onPatch, onGenerate, onFollowUp, onCancel }: Props) {
+export function TabView({ tab, globalSettings, models, engines, skills, onPatch, onGenerate, onFollowUp, onNewQuestion, onCancel }: Props) {
   const [followText, setFollowText] = useState("");
   const running = tab.phase === "draft" || tab.phase === "humanize" || tab.phase === "followup";
   const canGenerate = tab.question.trim().length > 0 && !running;
@@ -161,6 +162,16 @@ export function TabView({ tab, globalSettings, models, engines, skills, onPatch,
 
       {hasAnswer && (
         <div className="followup">
+          <div className="followup-actions">
+            <span className="followup-label">Same job, another question?</span>
+            <button
+              className="btn btn-ghost"
+              title="Open a new tab with this job description — a fresh conversation"
+              onClick={onNewQuestion}
+            >
+              + New question
+            </button>
+          </div>
           {tab.messages.filter((m) => m.role === "user").length > 0 && (
             <div className="follow-thread">
               {tab.messages

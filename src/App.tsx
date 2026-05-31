@@ -5,14 +5,23 @@ import {
   loadSettings,
   saveSettings,
   newTab,
+  cloneTabForNewQuestion,
   deriveTitleLocal,
+  loadLogs,
+  saveLogs,
+  clearLogs,
+  uid,
+  LOG_CAP,
   type Settings,
   type Tab,
+  type LogEntry,
 } from "./lib/store";
 import { api, streamPost, type ModelOption } from "./lib/api";
 import { TabBar } from "./components/TabBar";
 import { TabView } from "./components/TabView";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { QuickNotes } from "./components/QuickNotes";
+import { LogsModal } from "./components/LogsModal";
 import { FunBackground, nextFunVariant, funLabel, type FunVariant } from "./components/FunBackground";
 
 function readLS(key: string): string | null {
@@ -42,6 +51,9 @@ export function App() {
   const [engines, setEngines] = useState<ModelOption[]>([]);
   const [skills, setSkills] = useState({ yc: false, humanizer: false, gemini: false });
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [quickOpen, setQuickOpen] = useState(false);
+  const [logsOpen, setLogsOpen] = useState(false);
+  const [logs, setLogs] = useState<LogEntry[]>(() => loadLogs());
   const [theme, setTheme] = useState<"dark" | "light">(
     () => (document.documentElement.dataset.theme as "dark" | "light") || "dark"
   );
@@ -109,6 +121,16 @@ export function App() {
     saveTabs(tabs);
   }, [tabs]);
 
+  // Persist the activity log on change.
+  useEffect(() => {
+    saveLogs(logs);
+  }, [logs]);
+
+  // Append a log entry, keeping only the most recent LOG_CAP entries.
+  const addLog = (entry: Omit<LogEntry, "id" | "ts">) => {
+    setLogs((prev) => [...prev, { ...entry, id: uid(), ts: Date.now() }].slice(-LOG_CAP));
+  };
+
   // Refresh skill availability whenever the vault changes.
   useEffect(() => {
     if (!settings?.vaultDir) return;
@@ -136,6 +158,14 @@ export function App() {
     setActiveId(t.id);
   };
 
+  // Ask another question about the same job: a fresh conversation that reuses the
+  // source tab's job description + RAG/YC/override context, with a blank question.
+  const addQuestionTab = (source: Tab) => {
+    const t = cloneTabForNewQuestion(source, tabs);
+    setTabs((prev) => [...prev, t]);
+    setActiveId(t.id);
+  };
+
   const closeTab = (id: string) => {
     controllers.current.get(id)?.abort();
     api.cancel(id).catch(() => {});
@@ -147,6 +177,7 @@ export function App() {
   };
 
   const runGenerate = (tab: Tab) => {
+    if (!settings) return;
     controllers.current.get(tab.id)?.abort();
     const controller = new AbortController();
     controllers.current.set(tab.id, controller);
@@ -167,6 +198,10 @@ export function App() {
     }
 
     const overrideBody = tab.overrideEnabled ? tab.override : undefined;
+    const eff = tab.overrideEnabled ? tab.override ?? settings : settings;
+    const meta = { tabId: tab.id, tabName: tab.name, tabColor: tab.color };
+    const startedAt = Date.now();
+    addLog({ ...meta, kind: "generate", engine: eff.engine, model: eff.model, question: tab.question });
 
     streamPost(
       `/api/tabs/${tab.id}/generate`,
@@ -178,10 +213,28 @@ export function App() {
             d.phase === "draft" ? { draft: t.draft + d.delta } : { answer: t.answer + d.delta }
           ),
         draft: (d) => updateTab(tab.id, { draft: d.text }),
-        activity: (d) => updateTab(tab.id, (t) => ({ activity: [...t.activity, d] })),
+        activity: (d) => {
+          updateTab(tab.id, (t) => ({ activity: [...t.activity, d] }));
+          addLog({ ...meta, kind: "tool", detail: `${d.tool} · ${d.input}` });
+        },
         notice: (d) => updateTab(tab.id, { notice: d.message }),
-        done: (d) => updateTab(tab.id, { answer: d.text, phase: "done" }),
-        error: (d) => updateTab(tab.id, { error: d.message, phase: "error" }),
+        done: (d) => {
+          updateTab(tab.id, { answer: d.text, phase: "done" });
+          addLog({
+            ...meta,
+            kind: "answer",
+            engine: eff.engine,
+            model: eff.model,
+            question: tab.question,
+            durationMs: Date.now() - startedAt,
+            chars: d.text.length,
+            detail: d.text.slice(0, 280),
+          });
+        },
+        error: (d) => {
+          updateTab(tab.id, { error: d.message, phase: "error" });
+          addLog({ ...meta, kind: "error", detail: d.message });
+        },
         session: () => {},
       },
       controller.signal
@@ -190,13 +243,16 @@ export function App() {
         if (controller.signal.aborted) {
           updateTab(tab.id, (t) => ({ phase: t.answer || t.draft ? "done" : "idle" }));
         } else {
-          updateTab(tab.id, { error: String(e?.message || e), phase: "error" });
+          const message = String(e?.message || e);
+          updateTab(tab.id, { error: message, phase: "error" });
+          addLog({ ...meta, kind: "error", detail: message });
         }
       })
       .finally(() => controllers.current.delete(tab.id));
   };
 
   const runFollowUp = (tab: Tab, text: string) => {
+    if (!settings) return;
     controllers.current.get(tab.id)?.abort();
     const controller = new AbortController();
     controllers.current.set(tab.id, controller);
@@ -208,6 +264,10 @@ export function App() {
       error: undefined,
     }));
     const overrideBody = tab.overrideEnabled ? tab.override : undefined;
+    const eff = tab.overrideEnabled ? tab.override ?? settings : settings;
+    const meta = { tabId: tab.id, tabName: tab.name, tabColor: tab.color };
+    const startedAt = Date.now();
+    addLog({ ...meta, kind: "followup", engine: eff.engine, model: eff.model, question: text });
 
     streamPost(
       `/api/tabs/${tab.id}/message`,
@@ -215,21 +275,42 @@ export function App() {
       {
         phase: (d) => updateTab(tab.id, { phase: d.phase }),
         text: (d) => updateTab(tab.id, (t) => ({ answer: t.answer + d.delta })),
-        activity: (d) => updateTab(tab.id, (t) => ({ activity: [...t.activity, d] })),
-        done: (d) =>
+        activity: (d) => {
+          updateTab(tab.id, (t) => ({ activity: [...t.activity, d] }));
+          addLog({ ...meta, kind: "tool", detail: `${d.tool} · ${d.input}` });
+        },
+        done: (d) => {
           updateTab(tab.id, (t) => ({
             answer: d.text,
             phase: "done",
             messages: [...t.messages, { role: "assistant", text: d.text }],
-          })),
-        error: (d) => updateTab(tab.id, { error: d.message, phase: "error" }),
+          }));
+          addLog({
+            ...meta,
+            kind: "answer",
+            engine: eff.engine,
+            model: eff.model,
+            question: text,
+            durationMs: Date.now() - startedAt,
+            chars: d.text.length,
+            detail: d.text.slice(0, 280),
+          });
+        },
+        error: (d) => {
+          updateTab(tab.id, { error: d.message, phase: "error" });
+          addLog({ ...meta, kind: "error", detail: d.message });
+        },
         session: () => {},
       },
       controller.signal
     )
       .catch((e) => {
         if (controller.signal.aborted) updateTab(tab.id, { phase: "done" });
-        else updateTab(tab.id, { error: String(e?.message || e), phase: "error" });
+        else {
+          const message = String(e?.message || e);
+          updateTab(tab.id, { error: message, phase: "error" });
+          addLog({ ...meta, kind: "error", detail: message });
+        }
       })
       .finally(() => controllers.current.delete(tab.id));
   };
@@ -297,6 +378,7 @@ export function App() {
       onPatch={(patch) => patchTab(paneTab.id, patch)}
       onGenerate={() => runGenerate(paneTab)}
       onFollowUp={(text) => runFollowUp(paneTab, text)}
+      onNewQuestion={() => addQuestionTab(paneTab)}
       onCancel={() => cancel(paneTab.id)}
     />
   );
@@ -368,6 +450,26 @@ export function App() {
           >
             {density === "compact" ? "▣" : "▢"}
           </button>
+          <button
+            className={`icon-btn ${quickOpen ? "active" : ""}`}
+            title="Quick notes — reusable links & snippets"
+            onClick={() => setQuickOpen(true)}
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+              <path d="M14 3v5h5M9 13h6M9 17h4" />
+            </svg>
+          </button>
+          <button
+            className={`icon-btn ${logsOpen ? "active" : ""}`}
+            title="Logs — recent activity & stats"
+            onClick={() => setLogsOpen(true)}
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M3 3v18h18" />
+              <path d="M7 14l3-4 3 3 4-6" />
+            </svg>
+          </button>
           <button className="icon-btn" title="Settings" onClick={() => setSettingsOpen(true)}>
             ⚙
           </button>
@@ -429,6 +531,19 @@ export function App() {
           skills={skills}
           onChange={changeSettings}
           onClose={() => setSettingsOpen(false)}
+        />
+      )}
+
+      {quickOpen && <QuickNotes onClose={() => setQuickOpen(false)} />}
+
+      {logsOpen && (
+        <LogsModal
+          logs={logs}
+          onClear={() => {
+            clearLogs();
+            setLogs([]);
+          }}
+          onClose={() => setLogsOpen(false)}
         />
       )}
 
