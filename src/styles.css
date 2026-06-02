@@ -395,6 +395,48 @@ textarea:focus, input:focus, select:focus {
 .caret { display: inline-block; width: 7px; height: 15px; background: var(--accent); margin-left: 2px; vertical-align: text-bottom; animation: blink 1s step-start infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 
+/* Editable answer (shown when not streaming). */
+.answer-edit {
+  width: 100%; min-height: 60px; field-sizing: content; resize: vertical;
+  white-space: pre-wrap; word-wrap: break-word; line-height: 1.7; font-size: var(--fs-3);
+  color: var(--fg); background: transparent;
+  border: 1px dashed color-mix(in oklch, var(--border) 70%, transparent);
+  border-radius: var(--radius-1); padding: 8px 10px; font-family: inherit;
+  transition: border-color 130ms ease;
+}
+.answer-edit:focus { outline: none; border-style: solid; border-color: color-mix(in oklch, var(--accent) 45%, var(--border)); }
+
+/* Answer card action icons (regenerate / clean up / copy). */
+.answer-actions { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.act-btn {
+  display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px;
+  background: color-mix(in oklch, var(--surface) 92%, transparent);
+  border: 1px solid color-mix(in oklch, var(--border) 82%, transparent);
+  color: var(--fg); border-radius: 7px; cursor: pointer;
+  transition: background 130ms ease, border-color 130ms ease, transform 90ms ease;
+}
+.act-btn:hover:not(:disabled) { background: color-mix(in oklch, var(--accent) 12%, var(--surface)); border-color: color-mix(in oklch, var(--accent) 38%, var(--border)); }
+.act-btn:active:not(:disabled) { transform: scale(0.94); }
+.act-btn:disabled { opacity: 0.4; cursor: default; }
+
+/* Ask / Job mode toggle in the inputs card header. */
+.mode-switch {
+  display: inline-flex; gap: 2px; padding: 2px;
+  background: color-mix(in oklch, var(--surface) 90%, transparent);
+  border: 1px solid var(--border); border-radius: 8px;
+}
+.mode-switch button {
+  appearance: none; border: 0; background: transparent; color: var(--muted);
+  font: inherit; font-size: var(--fs-1); padding: 3px 12px; border-radius: 6px; cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.mode-switch button:hover { color: var(--fg); }
+.mode-switch button.active { background: color-mix(in oklch, var(--accent) 22%, var(--surface)); color: var(--fg); }
+
+/* Per-tab mode glyph in the tab bar. */
+.tab-mode { display: inline-flex; align-items: center; color: var(--muted); opacity: 0.85; flex: 0 0 auto; }
+.tab.active .tab-mode { color: var(--fg); opacity: 1; }
+
 .notice { background: color-mix(in oklch, var(--warning) 14%, var(--surface)); border: 1px solid color-mix(in oklch, var(--warning) 40%, var(--border)); color: color-mix(in oklch, var(--warning) 80%, var(--fg)); border-radius: var(--radius-1); padding: 9px 12px; font-size: var(--fs-2); }
 .notice.small { font-size: var(--fs-1); padding: 7px 10px; }
 .error-box { background: color-mix(in oklch, var(--danger) 12%, var(--surface)); border: 1px solid color-mix(in oklch, var(--danger) 40%, var(--border)); color: color-mix(in oklch, var(--danger) 82%, var(--fg)); border-radius: var(--radius-1); padding: 9px 12px; font-size: var(--fs-2); }

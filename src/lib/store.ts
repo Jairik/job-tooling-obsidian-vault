@@ -3,9 +3,14 @@
 export type Effort = "low" | "medium" | "high";
 export type Engine = "claude" | "gemini";
 
+// A tab is either a general "ask the vault" conversation (default) or the
+// job-application workflow.
+export type TabMode = "ask" | "job";
+
 export interface Settings {
   engine: Engine;
   model: string;
+  cleanupModel: string;
   effort: Effort;
   humanize: boolean;
   rag: boolean;
@@ -15,7 +20,7 @@ export interface Settings {
   extraDirs: string[];
 }
 
-export type Phase = "idle" | "draft" | "humanize" | "followup" | "done" | "error";
+export type Phase = "idle" | "draft" | "humanize" | "cleanup" | "followup" | "done" | "error";
 
 export interface Activity {
   tool: string;
@@ -32,6 +37,7 @@ export interface Tab {
   name: string;
   color: string;
   autoNamed: boolean; // false once the user manually renames
+  mode: TabMode;
   jobDescription: string;
   question: string;
   yc: boolean;
@@ -145,12 +151,13 @@ export function uid(): string {
   return crypto.randomUUID();
 }
 
-export function newTab(existing: Tab[] = [], ragDefault = false): Tab {
+export function newTab(existing: Tab[] = [], ragDefault = false, mode: TabMode = "ask"): Tab {
   return {
     id: uid(),
     name: codename(),
     color: pickColor(existing),
     autoNamed: true,
+    mode,
     jobDescription: "",
     question: "",
     yc: false,
@@ -168,7 +175,7 @@ export function newTab(existing: Tab[] = [], ragDefault = false): Tab {
 // RAG/YC/override settings) but starts fresh: new id → new server session, blank
 // question, empty answer/messages, its own color and auto-name.
 export function cloneTabForNewQuestion(source: Tab, existing: Tab[]): Tab {
-  const base = newTab(existing, source.rag);
+  const base = newTab(existing, source.rag, source.mode);
   return {
     ...base,
     jobDescription: source.jobDescription,
@@ -189,9 +196,14 @@ export function loadTabs(): Tab[] {
         ...t,
         color: t.color ?? PALETTE[i % PALETTE.length],
         rag: t.rag ?? false,
+        // Tabs predating the rebrand: keep clearly job-application ones in Job
+        // mode, default everything else to the new Ask mode.
+        mode: t.mode ?? (t.jobDescription || t.yc ? "job" : "ask"),
         autoNamed: t.autoNamed ?? /^Tab \d+$/.test(t.name),
         phase:
-          t.phase === "draft" || t.phase === "humanize" || t.phase === "followup" ? "idle" : t.phase,
+          t.phase === "draft" || t.phase === "humanize" || t.phase === "cleanup" || t.phase === "followup"
+            ? "idle"
+            : t.phase,
       }));
     }
   } catch {
@@ -311,7 +323,7 @@ export function saveQuickNotes(qn: QuickNotes): void {
 // A lightweight, local-only record of what the tool has been doing: generations,
 // follow-ups, finished answers, tool calls and errors. Powers the Logs modal.
 
-export type LogKind = "generate" | "followup" | "answer" | "error" | "tool";
+export type LogKind = "generate" | "followup" | "cleanup" | "answer" | "error" | "tool";
 
 export interface LogEntry {
   id: string;

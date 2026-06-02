@@ -23,6 +23,7 @@ interface Props {
 const KIND_LABEL: Record<LogKind, string> = {
   generate: "generate",
   followup: "follow-up",
+  cleanup: "clean up",
   answer: "answer",
   error: "error",
   tool: "tool",

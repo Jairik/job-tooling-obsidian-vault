@@ -8,14 +8,23 @@ import { join } from "path";
 import {
   REASONING,
   DEFAULT_MODEL,
+  DEFAULT_CLEANUP_MODEL,
+  ASK_PERSONA,
   buildAppend,
   buildDraftPrompt,
   buildRagDraftPrompt,
   buildRagFollowupPrompt,
+  buildAskPrompt,
+  buildRagAskPrompt,
+  buildCleanupPrompt,
+  buildCleanupAppend,
   buildGeminiDraftPrompt,
   buildGeminiHumanizePrompt,
   buildGeminiFollowupPrompt,
+  buildGeminiAskPrompt,
+  buildGeminiCleanupPrompt,
   type Settings,
+  type TabMode,
 } from "./config";
 import { detectSkills } from "./skills";
 import { geminiAvailable, runAgyTurn, gatherVaultContext } from "./gemini";
@@ -159,6 +168,7 @@ interface GenerateArgs {
   question: string;
   yc: boolean;
   rag: boolean;
+  mode: TabMode;
   settings: Settings;
 }
 
@@ -167,10 +177,11 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
   sessions.set(tabId, { ...sessions.get(tabId), abort });
 
   const isGemini = args.settings.engine === "gemini";
+  const isAsk = args.mode === "ask";
   const skills = await detectSkills(args.settings.vaultDir);
-  // The yc-combinator skill is Claude-only.
-  const useYc = !isGemini && args.yc && skills.yc;
-  if (args.yc && !useYc) {
+  // The yc-combinator skill is Claude-only and job-mode-only.
+  const useYc = !isAsk && !isGemini && args.yc && skills.yc;
+  if (!isAsk && args.yc && !useYc) {
     emit("notice", {
       message: isGemini
         ? "YC styling uses the Claude-only yc-combinator skill and is skipped on the Gemini engine."
@@ -181,7 +192,57 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
   let finalText = "";
   let finalSession: string | undefined;
 
-  const ragQuery = `${args.jobDescription}\n\n${args.question}`;
+  // Ask mode retrieves on the question alone; job mode also factors in the JD.
+  const ragQuery = isAsk ? args.question : `${args.jobDescription}\n\n${args.question}`;
+
+  if (isAsk) {
+    // ── Ask mode: a single grounded answer turn, no humanize pass ──────────
+    let ragContext = "";
+    if (args.rag) {
+      ragContext = await retrieveForQuery(args.settings, ragQuery, emit);
+      if (!ragContext) {
+        emit("notice", {
+          message: "RAG found no matching vault excerpts — falling back to full vault reading for this answer.",
+        });
+      }
+    }
+    const useRag = Boolean(ragContext);
+
+    emit("phase", { phase: "draft" });
+    if (isGemini) {
+      if (!geminiAvailable()) {
+        emit("error", {
+          message: "The `agy` CLI was not found on PATH. Install Gemini Antigravity CLI, or switch the engine to Claude in Settings.",
+        });
+        return;
+      }
+      let context = ragContext;
+      if (!context) context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
+      finalText = await runAgyTurn({
+        prompt: buildGeminiAskPrompt(ASK_PERSONA, context, args.question),
+        phase: "draft",
+        emit,
+        abort,
+      });
+    } else {
+      const ans = await runTurn({
+        prompt: useRag ? buildRagAskPrompt(ragContext, args.question) : buildAskPrompt(args.question),
+        settings: args.settings,
+        append: buildAppend({ persona: ASK_PERSONA, mode: "ask", useRag, phase: "draft" }),
+        allowedTools: useRag ? RAG_TOOLS : undefined,
+        phase: "draft",
+        emit,
+        abort,
+      });
+      finalText = ans.text;
+      finalSession = ans.sessionId;
+    }
+
+    sessions.set(tabId, { sessionId: finalSession, abort: undefined, lastAnswer: finalText });
+    await persistSessions();
+    emit("done", { text: finalText, sessionId: finalSession });
+    return;
+  }
 
   if (isGemini) {
     if (!geminiAvailable()) {
@@ -237,7 +298,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
         ? buildRagDraftPrompt(ragContext, args.jobDescription, args.question)
         : buildDraftPrompt(args.jobDescription, args.question),
       settings: args.settings,
-      append: buildAppend({ persona: args.settings.persona, useYc, useRag, phase: "draft" }),
+      append: buildAppend({ persona: args.settings.persona, mode: "job", useYc, useRag, phase: "draft" }),
       allowedTools: tools,
       phase: "draft",
       emit,
@@ -254,7 +315,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
           "Apply the humanizer skill to your previous answer. Return ONLY the final humanized version of the answer text — no commentary, no drafts, no audit notes.",
         resume: draft.sessionId,
         settings: args.settings,
-        append: buildAppend({ persona: args.settings.persona, useYc, useRag, phase: "humanize" }),
+        append: buildAppend({ persona: args.settings.persona, mode: "job", useYc, useRag, phase: "humanize" }),
         allowedTools: tools,
         phase: "humanize",
         emit,
@@ -273,6 +334,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
 interface FollowUpArgs {
   text: string;
   rag: boolean;
+  mode: TabMode;
   settings: Settings;
 }
 
@@ -282,6 +344,10 @@ export async function followUp(tabId: string, args: FollowUpArgs, emit: Emit): P
   sessions.set(tabId, { ...prev, abort });
 
   emit("phase", { phase: "followup" });
+
+  // Ask follow-ups keep the general assistant voice; job follow-ups keep the
+  // configurable job persona. The resumed session re-receives this each turn.
+  const persona = args.mode === "ask" ? ASK_PERSONA : args.settings.persona;
 
   let finalText = "";
   let finalSession = prev?.sessionId;
@@ -295,7 +361,7 @@ export async function followUp(tabId: string, args: FollowUpArgs, emit: Emit): P
     if (args.rag) context = await retrieveForQuery(args.settings, args.text, emit);
     if (!context) context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
     finalText = await runAgyTurn({
-      prompt: buildGeminiFollowupPrompt(args.settings.persona, context, prev?.lastAnswer ?? "", args.text),
+      prompt: buildGeminiFollowupPrompt(persona, context, prev?.lastAnswer ?? "", args.text),
       phase: "followup",
       emit,
       abort,
@@ -309,7 +375,7 @@ export async function followUp(tabId: string, args: FollowUpArgs, emit: Emit): P
       prompt: useRag ? buildRagFollowupPrompt(ragContext, args.text) : args.text,
       resume: prev?.sessionId,
       settings: args.settings,
-      append: buildAppend({ persona: args.settings.persona, useRag, phase: "followup" }),
+      append: buildAppend({ persona, mode: args.mode, useRag, phase: "followup" }),
       allowedTools: useRag ? RAG_TOOLS : undefined,
       phase: "followup",
       emit,
@@ -322,6 +388,67 @@ export async function followUp(tabId: string, args: FollowUpArgs, emit: Emit): P
   sessions.set(tabId, { sessionId: finalSession, abort: undefined, lastAnswer: finalText });
   await persistSessions();
   emit("done", { text: finalText, sessionId: finalSession });
+}
+
+interface CleanupArgs {
+  text: string;
+  settings: Settings;
+}
+
+// Polish the supplied answer text (grammar fix + humanize) with the lightweight
+// cleanup model. Runs a fresh, throwaway turn on the exact text passed in
+// (including any manual edits) — it does NOT resume the tab's conversation, and
+// it preserves the tab's real follow-up session id.
+export async function cleanup(tabId: string, args: CleanupArgs, emit: Emit): Promise<void> {
+  const prev = sessions.get(tabId);
+  const abort = new AbortController();
+  sessions.set(tabId, { ...prev, abort });
+
+  emit("phase", { phase: "cleanup" });
+
+  const text = args.text.trim();
+  if (!text) {
+    sessions.set(tabId, { ...prev, abort: undefined });
+    emit("done", { text: "", sessionId: prev?.sessionId });
+    return;
+  }
+
+  const skills = await detectSkills(args.settings.vaultDir);
+  let cleaned = text;
+
+  if (args.settings.engine === "gemini") {
+    if (!geminiAvailable()) {
+      emit("error", { message: "The `agy` CLI was not found on PATH. Switch the engine to Claude in Settings." });
+      return;
+    }
+    const out = await runAgyTurn({
+      prompt: buildGeminiCleanupPrompt(text),
+      phase: "cleanup",
+      emit,
+      abort,
+    });
+    if (out) cleaned = out;
+  } else {
+    // Lightweight: cleanup model + low reasoning, Skill tool only (no file browsing).
+    const cleanupSettings: Settings = {
+      ...args.settings,
+      model: args.settings.cleanupModel || DEFAULT_CLEANUP_MODEL,
+      effort: "low",
+    };
+    const r = await runTurn({
+      prompt: buildCleanupPrompt(text, skills.humanizer),
+      settings: cleanupSettings,
+      append: buildCleanupAppend(skills.humanizer),
+      allowedTools: RAG_TOOLS,
+      phase: "cleanup",
+      emit,
+      abort,
+    });
+    if (r.text) cleaned = r.text;
+  }
+
+  sessions.set(tabId, { sessionId: prev?.sessionId, abort: undefined, lastAnswer: cleaned });
+  emit("done", { text: cleaned, sessionId: prev?.sessionId });
 }
 
 export function hasSession(tabId: string): boolean {

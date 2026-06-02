@@ -14,6 +14,7 @@ import {
   LOG_CAP,
   type Settings,
   type Tab,
+  type TabMode,
   type LogEntry,
 } from "./lib/store";
 import { api, streamPost, type ModelOption } from "./lib/api";
@@ -66,6 +67,10 @@ export function App() {
   );
   const [split, setSplit] = useState<boolean>(() => readLS("jt.split") === "on");
   const [rightId, setRightId] = useState<string>("");
+  // Mode new tabs open in. Defaults to Ask; persisted like the other UI prefs.
+  const [defaultMode, setDefaultMode] = useState<TabMode>(() =>
+    readLS("jt.defaultmode") === "job" ? "job" : "ask"
+  );
 
   const controllers = useRef(new Map<string, AbortController>());
 
@@ -103,6 +108,11 @@ export function App() {
   useEffect(() => {
     writeLS("jt.split", split ? "on" : "off");
   }, [split]);
+
+  // Default mode for new tabs.
+  useEffect(() => {
+    writeLS("jt.defaultmode", defaultMode);
+  }, [defaultMode]);
 
   // Initial load: server config (authoritative) merged with anything saved locally.
   useEffect(() => {
@@ -153,7 +163,7 @@ export function App() {
   };
 
   const addTab = () => {
-    const t = newTab(tabs, settings?.rag ?? false);
+    const t = newTab(tabs, settings?.rag ?? false, defaultMode);
     setTabs((prev) => [...prev, t]);
     setActiveId(t.id);
   };
@@ -205,7 +215,7 @@ export function App() {
 
     streamPost(
       `/api/tabs/${tab.id}/generate`,
-      { jobDescription: tab.jobDescription, question: tab.question, yc: tab.yc, rag: tab.rag, settings: overrideBody },
+      { jobDescription: tab.jobDescription, question: tab.question, yc: tab.yc, rag: tab.rag, mode: tab.mode, settings: overrideBody },
       {
         phase: (d) => updateTab(tab.id, { phase: d.phase }),
         text: (d) =>
@@ -271,7 +281,7 @@ export function App() {
 
     streamPost(
       `/api/tabs/${tab.id}/message`,
-      { text, rag: tab.rag, settings: overrideBody },
+      { text, rag: tab.rag, mode: tab.mode, settings: overrideBody },
       {
         phase: (d) => updateTab(tab.id, { phase: d.phase }),
         text: (d) => updateTab(tab.id, (t) => ({ answer: t.answer + d.delta })),
@@ -309,6 +319,67 @@ export function App() {
         else {
           const message = String(e?.message || e);
           updateTab(tab.id, { error: message, phase: "error" });
+          addLog({ ...meta, kind: "error", detail: message });
+        }
+      })
+      .finally(() => controllers.current.delete(tab.id));
+  };
+
+  // Polish the current (possibly hand-edited) answer with the lightweight cleanup
+  // model: fix grammar + humanize. Streams a replacement into the answer panel;
+  // the original text is restored if the run is stopped or errors.
+  const runCleanup = (tab: Tab) => {
+    if (!settings) return;
+    const sourceText = (tab.answer || tab.draft).trim();
+    if (!sourceText) return;
+    controllers.current.get(tab.id)?.abort();
+    const controller = new AbortController();
+    controllers.current.set(tab.id, controller);
+    updateTab(tab.id, { phase: "cleanup", activity: [], answer: "", error: undefined, notice: undefined });
+
+    const overrideBody = tab.overrideEnabled ? tab.override : undefined;
+    const eff = tab.overrideEnabled ? tab.override ?? settings : settings;
+    const meta = { tabId: tab.id, tabName: tab.name, tabColor: tab.color };
+    const startedAt = Date.now();
+    addLog({ ...meta, kind: "cleanup", engine: eff.engine, model: eff.cleanupModel });
+
+    streamPost(
+      `/api/tabs/${tab.id}/cleanup`,
+      { text: sourceText, settings: overrideBody },
+      {
+        phase: (d) => updateTab(tab.id, { phase: d.phase }),
+        text: (d) => updateTab(tab.id, (t) => ({ answer: t.answer + d.delta })),
+        activity: (d) => {
+          updateTab(tab.id, (t) => ({ activity: [...t.activity, d] }));
+          addLog({ ...meta, kind: "tool", detail: `${d.tool} · ${d.input}` });
+        },
+        notice: (d) => updateTab(tab.id, { notice: d.message }),
+        done: (d) => {
+          updateTab(tab.id, { answer: d.text || sourceText, phase: "done" });
+          addLog({
+            ...meta,
+            kind: "answer",
+            engine: eff.engine,
+            model: eff.cleanupModel,
+            durationMs: Date.now() - startedAt,
+            chars: (d.text || "").length,
+            detail: (d.text || "").slice(0, 280),
+          });
+        },
+        error: (d) => {
+          updateTab(tab.id, (t) => ({ error: d.message, phase: "error", answer: t.answer || sourceText }));
+          addLog({ ...meta, kind: "error", detail: d.message });
+        },
+        session: () => {},
+      },
+      controller.signal
+    )
+      .catch((e) => {
+        if (controller.signal.aborted) {
+          updateTab(tab.id, (t) => ({ phase: "done", answer: t.answer || sourceText }));
+        } else {
+          const message = String(e?.message || e);
+          updateTab(tab.id, (t) => ({ error: message, phase: "error", answer: t.answer || sourceText }));
           addLog({ ...meta, kind: "error", detail: message });
         }
       })
@@ -360,8 +431,9 @@ export function App() {
     phase === "done" ? "ok" : phase === "error" ? "bad" : phase === "idle" ? "" : "warn";
   const phaseText: Record<string, string> = {
     idle: "idle",
-    draft: "drafting",
+    draft: "working",
     humanize: "humanizing",
+    cleanup: "cleaning up",
     followup: "revising",
     done: "ready",
     error: "error",
@@ -378,6 +450,7 @@ export function App() {
       onPatch={(patch) => patchTab(paneTab.id, patch)}
       onGenerate={() => runGenerate(paneTab)}
       onFollowUp={(text) => runFollowUp(paneTab, text)}
+      onCleanup={() => runCleanup(paneTab)}
       onNewQuestion={() => addQuestionTab(paneTab)}
       onCancel={() => cancel(paneTab.id)}
     />
@@ -388,12 +461,12 @@ export function App() {
       {fun && <FunBackground variant={funVariant} />}
       <header className="topbar">
         <div className="brand">
-          <span className="app-icon" title="Job Tooling">
-            <span className="app-icon-mark">JT</span>
+          <span className="app-icon" title="Vault Assistant">
+            <span className="app-icon-mark">VA</span>
           </span>
           <div className="brand-text">
             <span className="kicker">grounded · obsidian vault</span>
-            <span className="brand-title">Job Tooling</span>
+            <span className="brand-title">Vault Assistant</span>
           </div>
         </div>
         <div className="topbar-meta">
@@ -529,6 +602,8 @@ export function App() {
           models={models}
           engines={engines}
           skills={skills}
+          defaultMode={defaultMode}
+          onDefaultModeChange={setDefaultMode}
           onChange={changeSettings}
           onClose={() => setSettingsOpen(false)}
         />

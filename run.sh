@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-command launcher for Job Tooling.
+# One-command launcher for Vault Assistant.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -16,7 +16,7 @@ bun install
 
 PORT="${PORT:-5173}"
 echo ""
-echo "Job Tooling starting on http://localhost:${PORT}"
+echo "Vault Assistant starting on http://localhost:${PORT}"
 echo "Press Ctrl+C to stop."
 echo ""
 exec bun --hot server.ts

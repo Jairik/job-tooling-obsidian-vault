@@ -1,9 +1,13 @@
-# Job Tooling
+# Vault Assistant
 
-A multi-tab web UI that drafts job-application answers with Claude Code (Sonnet,
-medium reasoning) instances, grounded in your Obsidian vault, then humanizes them.
-Each tab is an independent conversation: paste a job description + a question, hit
-**Generate**, and tweak the result with follow-up messages.
+A multi-tab web UI for asking questions about your Obsidian vault with Claude Code
+(Sonnet, medium reasoning) instances, grounded in what the vault actually says.
+Each tab is an independent conversation: type a question, hit **Ask**, edit the
+answer in place, and tweak it with follow-ups.
+
+A separate **Job mode** (per-tab toggle) switches to the original workflow: paste a
+job description + a question and draft a grounded, humanized first-person
+job-application answer.
 
 ## Run it
 
@@ -20,15 +24,35 @@ That's it. Open http://localhost:5173.
 - Claude Code installed and logged in (the app reuses your existing auth — no API
   key needed). If you are not logged in, set `ANTHROPIC_API_KEY` in `.env`.
 
-## How it works
+## Modes
 
-1. **Draft** — a Claude Code instance (Sonnet, medium reasoning) reads the relevant
-   files in your vault (`JJ-master/Projects`, `Background`, `Leadership-Examples`,
-   etc.) and writes a grounded, first-person answer. Nothing is fabricated.
+Each tab is either **Ask** (the default) or **Job**, switched with the toggle in the
+tab's header. A small icon on every tab shows which mode it's in, and the Settings
+drawer has a checkbox to choose the default mode for new tabs.
+
+### Ask mode (default)
+A Claude Code instance reads the relevant files in your vault and answers your
+question directly, grounded in what it finds — nothing fabricated. One turn, no
+auto-humanize. Follow-ups resume the same session.
+
+### Job mode
+The original job-application workflow:
+1. **Draft** — reads the vault (`JJ-master/Projects`, `Background`,
+   `Leadership-Examples`, etc.) and writes a grounded, first-person answer.
 2. **Humanize** — the `humanizer` skill is run on the draft; the humanized version
    becomes the final answer (the raw draft stays in a collapsible panel).
 3. **Follow-ups** — type tweaks ("make it shorter", "lead with the Lunara project")
    and the same session is resumed.
+
+## Editing & Clean up
+
+Generated answers are **editable in place** — just click into the answer and type;
+edits persist with the tab. Two icons on the answer card:
+- **↻ Regenerate** — re-runs generation from the current inputs.
+- **✨ Clean up** — sends the current (possibly hand-edited) answer to a lightweight
+  **cleanup model** (default Haiku 4.5) that fixes grammar and polishes the writing
+  with the `humanizer` skill (inline rules when the skill isn't installed). It runs
+  on a throwaway turn and won't disturb the tab's follow-up session.
 
 ### Tabs & concurrency
 Spawn as many tabs as you want; each runs its own Claude Code instance and can
@@ -43,15 +67,15 @@ prompt (Gemini). Fewer input tokens, same grounding.
 
 It's BM25 retrieval implemented in pure Bun/TypeScript (`agent/rag.ts`) — no
 embeddings service, no API keys, nothing to install. The retrieved files/headings
-show up in the tab's **Context activity** log. There's a per-tab toggle next to
-**YC** and a global default in Settings; new tabs inherit the global default. If a
-query matches nothing, RAG steps aside and the normal full-vault path runs. See
-[`docs/rag.md`](docs/rag.md) for details.
+show up in the tab's **Context activity** log. There's a per-tab toggle in the
+controls row (available in both modes) and a global default in Settings; new tabs
+inherit the global default. If a query matches nothing, RAG steps aside and the
+normal full-vault path runs. See [`docs/rag.md`](docs/rag.md) for details.
 
-### YC checkbox
-Checking **YC** uses a `yc-combinator` skill to shape the answer for a Y Combinator
-application. That skill is not installed yet, so the checkbox currently shows a
-"skill not found" note and generates normally. Drop a skill at
+### YC checkbox (Job mode)
+In **Job mode**, checking **YC** uses a `yc-combinator` skill to shape the answer
+for a Y Combinator application. That skill is not installed yet, so the checkbox
+currently shows a "skill not found" note and generates normally. Drop a skill at
 `~/.claude/skills/yc-combinator/SKILL.md` (or `<vault>/.claude/skills/...`) and it
 activates automatically — no code change.
 
@@ -74,13 +98,15 @@ a tab to rename it; manual names stick.
 ## Settings (gear icon)
 
 Everything is configurable, globally and per-tab:
+- **Default mode for new tabs** (Ask / Job)
 - **Engine** (Claude Code / Gemini Antigravity)
 - **Model** (Claude only — default Sonnet; Opus / Haiku available)
+- **Cleanup model** (Claude only — lightweight model for the **Clean up** button; default Haiku)
 - **Reasoning effort** (Claude only — low / medium / high)
-- **Humanize** on/off
+- **Humanize** on/off (Job mode)
 - **RAG** retrieval on/off (default for new tabs; minimizes tokens)
 - **Vault / context repo** path (+ extra context dirs) with live validation
-- **Persona / system prompt** (the grounding instructions)
+- **Persona / system prompt** (the Job-mode grounding instructions)
 - **Max turns**
 
 ## Config & data files

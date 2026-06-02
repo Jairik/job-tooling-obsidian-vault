@@ -13,13 +13,16 @@ interface Props {
   onPatch: (patch: Partial<Tab>) => void;
   onGenerate: () => void;
   onFollowUp: (text: string) => void;
+  onCleanup: () => void;
   onNewQuestion: () => void;
   onCancel: () => void;
 }
 
-export function TabView({ tab, globalSettings, models, engines, skills, onPatch, onGenerate, onFollowUp, onNewQuestion, onCancel }: Props) {
+export function TabView({ tab, globalSettings, models, engines, skills, onPatch, onGenerate, onFollowUp, onCleanup, onNewQuestion, onCancel }: Props) {
   const [followText, setFollowText] = useState("");
-  const running = tab.phase === "draft" || tab.phase === "humanize" || tab.phase === "followup";
+  const running =
+    tab.phase === "draft" || tab.phase === "humanize" || tab.phase === "cleanup" || tab.phase === "followup";
+  const isAsk = tab.mode === "ask";
   const canGenerate = tab.question.trim().length > 0 && !running;
   const hasAnswer = Boolean(tab.answer || tab.draft);
 
@@ -41,22 +44,39 @@ export function TabView({ tab, globalSettings, models, engines, skills, onPatch,
     <div className="tabview">
       <div className="card inputs">
         <div className="card-h">
-          <h2>New answer</h2>
-          <span className="hint">grounded in your vault</span>
+          <h2>{isAsk ? "Ask the vault" : "New answer"}</h2>
+          <div className="mode-switch" role="group" aria-label="Mode">
+            <button
+              className={isAsk ? "active" : ""}
+              onClick={() => onPatch({ mode: "ask" })}
+              title="Ask general questions about your vault"
+            >
+              Ask
+            </button>
+            <button
+              className={!isAsk ? "active" : ""}
+              onClick={() => onPatch({ mode: "job" })}
+              title="Draft a job-application answer (grounded + humanized)"
+            >
+              Job
+            </button>
+          </div>
         </div>
         <div className="card-b">
-        <label className="field">
-          <div className="field-head">
-            <span>Job description</span>
-            <span className="aux">optional</span>
-          </div>
-          <textarea
-            rows={6}
-            placeholder="Paste the job description (optional but recommended)…"
-            value={tab.jobDescription}
-            onChange={(e) => onPatch({ jobDescription: e.target.value })}
-          />
-        </label>
+        {!isAsk && (
+          <label className="field">
+            <div className="field-head">
+              <span>Job description</span>
+              <span className="aux">optional</span>
+            </div>
+            <textarea
+              rows={6}
+              placeholder="Paste the job description (optional but recommended)…"
+              value={tab.jobDescription}
+              onChange={(e) => onPatch({ jobDescription: e.target.value })}
+            />
+          </label>
+        )}
 
         <label className="field">
           <div className="field-head">
@@ -65,18 +85,20 @@ export function TabView({ tab, globalSettings, models, engines, skills, onPatch,
           </div>
           <textarea
             rows={3}
-            placeholder="The specific application question to answer…"
+            placeholder={isAsk ? "Ask anything about your vault…" : "The specific application question to answer…"}
             value={tab.question}
             onChange={(e) => onPatch({ question: e.target.value })}
           />
         </label>
 
         <div className="controls">
-          <label className="chip">
-            <input type="checkbox" checked={tab.yc} onChange={(e) => onPatch({ yc: e.target.checked })} />
-            <span>YC</span>
-            {tab.yc && !skills.yc && <span className="chip-note warn">skill not found</span>}
-          </label>
+          {!isAsk && (
+            <label className="chip">
+              <input type="checkbox" checked={tab.yc} onChange={(e) => onPatch({ yc: e.target.checked })} />
+              <span>YC</span>
+              {tab.yc && !skills.yc && <span className="chip-note warn">skill not found</span>}
+            </label>
+          )}
 
           <label className="chip" title="Retrieve only the most relevant vault excerpts instead of reading the whole vault — fewer tokens.">
             <input type="checkbox" checked={tab.rag} onChange={(e) => onPatch({ rag: e.target.checked })} />
@@ -101,7 +123,7 @@ export function TabView({ tab, globalSettings, models, engines, skills, onPatch,
             </button>
           ) : (
             <button className="btn btn-primary" disabled={!canGenerate} onClick={onGenerate}>
-              {hasAnswer ? "Regenerate" : "Generate"}
+              {hasAnswer ? "Regenerate" : isAsk ? "Ask" : "Generate"}
             </button>
           )}
         </div>
@@ -143,10 +165,12 @@ export function TabView({ tab, globalSettings, models, engines, skills, onPatch,
                 </label>
               </>
             )}
-            <label className="field-row">
-              <input type="checkbox" checked={ov.humanize} onChange={(e) => setOverride({ humanize: e.target.checked })} />
-              <span>Humanize</span>
-            </label>
+            {!isAsk && (
+              <label className="field-row">
+                <input type="checkbox" checked={ov.humanize} onChange={(e) => setOverride({ humanize: e.target.checked })} />
+                <span>Humanize</span>
+              </label>
+            )}
             <label className="field wide">
               <span>Vault / context repo (this tab)</span>
               <input type="text" value={ov.vaultDir} spellCheck={false} onChange={(e) => setOverride({ vaultDir: e.target.value })} />
@@ -156,7 +180,17 @@ export function TabView({ tab, globalSettings, models, engines, skills, onPatch,
         </div>
       </div>
 
-      <AnswerStream phase={tab.phase} draft={tab.draft} answer={tab.answer} notice={tab.notice} error={tab.error} />
+      <AnswerStream
+        phase={tab.phase}
+        mode={tab.mode}
+        draft={tab.draft}
+        answer={tab.answer}
+        notice={tab.notice}
+        error={tab.error}
+        onEditAnswer={(text) => onPatch({ answer: text })}
+        onCleanup={onCleanup}
+        onRegenerate={onGenerate}
+      />
 
       <ActivityLog activity={tab.activity} />
 

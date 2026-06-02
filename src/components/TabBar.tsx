@@ -48,6 +48,20 @@ export function TabBar({ tabs, activeId, onSelect, onAdd, onClose, onRename }: P
             className={`dot ${statusClass ?? ""}`}
             style={statusClass ? undefined : { background: t.color }}
           />
+          <span className="tab-mode" title={t.mode === "job" ? "Job mode" : "Ask mode"} aria-hidden>
+            {t.mode === "job" ? (
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="7" width="18" height="13" rx="2" />
+                <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M9.6 9.2a2.5 2.5 0 0 1 4.6 1.3c0 1.6-2.2 1.9-2.2 3.3" />
+                <path d="M12 17.2h.01" />
+              </svg>
+            )}
+          </span>
           {editing === t.id ? (
             <input
               className="tab-rename"

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Settings } from "../lib/store";
+import type { Settings, TabMode } from "../lib/store";
 import { api, type ModelOption } from "../lib/api";
 
 interface Props {
@@ -7,6 +7,8 @@ interface Props {
   models: ModelOption[];
   engines: ModelOption[];
   skills: { yc: boolean; humanizer: boolean; gemini: boolean };
+  defaultMode: TabMode;
+  onDefaultModeChange: (mode: TabMode) => void;
   onChange: (patch: Partial<Settings>) => void;
   onClose: () => void;
 }
@@ -17,7 +19,7 @@ interface VaultState {
   message?: string;
 }
 
-export function SettingsPanel({ settings, models, engines, skills, onChange, onClose }: Props) {
+export function SettingsPanel({ settings, models, engines, skills, defaultMode, onDefaultModeChange, onChange, onClose }: Props) {
   const [vaultInput, setVaultInput] = useState(settings.vaultDir);
   const [vault, setVault] = useState<VaultState | null>(null);
 
@@ -43,6 +45,18 @@ export function SettingsPanel({ settings, models, engines, skills, onChange, onC
           </button>
         </div>
         <p className="drawer-sub">Global defaults. Each tab can override these.</p>
+
+        <label className="toggle-row">
+          <input
+            type="checkbox"
+            checked={defaultMode === "job"}
+            onChange={(e) => onDefaultModeChange(e.target.checked ? "job" : "ask")}
+          />
+          <span>Open new tabs in Job mode (off = Ask the vault)</span>
+        </label>
+        <div className="notice small">
+          Each tab still has its own Ask / Job toggle; this only sets the default for new tabs.
+        </div>
 
         <label className="field">
           <span>Engine</span>
@@ -88,6 +102,21 @@ export function SettingsPanel({ settings, models, engines, skills, onChange, onC
                 <option value="medium">Medium</option>
                 <option value="high">High</option>
               </select>
+            </label>
+
+            <label className="field">
+              <span>Cleanup model</span>
+              <select
+                value={settings.cleanupModel}
+                onChange={(e) => onChange({ cleanupModel: e.target.value })}
+              >
+                {models.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+              <div className="notice small">Lightweight model used by the answer card's “Clean up” button (grammar fix + humanize).</div>
             </label>
           </>
         )}

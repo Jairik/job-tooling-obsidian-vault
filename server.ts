@@ -1,7 +1,7 @@
 // Bun full-stack server: serves the React app (src/index.html) and a small
 // JSON + SSE API that drives Claude Code instances per tab.
 import index from "./src/index.html";
-import { generate, followUp, cancel, loadSessions } from "./agent/runner";
+import { generate, followUp, cleanup, cancel, loadSessions } from "./agent/runner";
 import { detectSkills } from "./agent/skills";
 import { geminiAvailable } from "./agent/gemini";
 import { loadConfig, saveConfig, defaultSettings, MODELS, ENGINES, DEFAULT_VAULT, type Settings } from "./agent/config";
@@ -125,6 +125,7 @@ const server = Bun.serve({
               question: body.question || "",
               yc: Boolean(body.yc),
               rag: Boolean(body.rag),
+              mode: body.mode === "job" ? "job" : "ask",
               settings,
             },
             emit
@@ -138,8 +139,20 @@ const server = Bun.serve({
         const body = await req.json();
         const settings = await resolveSettings(body.settings);
         return sse((emit) =>
-          followUp(req.params.id, { text: body.text || "", rag: Boolean(body.rag), settings }, emit)
+          followUp(
+            req.params.id,
+            { text: body.text || "", rag: Boolean(body.rag), mode: body.mode === "job" ? "job" : "ask", settings },
+            emit
+          )
         );
+      },
+    },
+
+    "/api/tabs/:id/cleanup": {
+      POST: async (req) => {
+        const body = await req.json();
+        const settings = await resolveSettings(body.settings);
+        return sse((emit) => cleanup(req.params.id, { text: body.text || "", settings }, emit));
       },
     },
 
@@ -157,4 +170,4 @@ const server = Bun.serve({
   },
 });
 
-console.log(`\n  Job Tooling → http://localhost:${server.port}\n`);
+console.log(`\n  Vault Assistant → http://localhost:${server.port}\n`);

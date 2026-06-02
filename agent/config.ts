@@ -6,6 +6,9 @@ export const DEFAULT_VAULT = process.env.VAULT_DIR || "/home/jj/repos/obsidian-v
 
 export const DEFAULT_MODEL = "claude-sonnet-4-6";
 
+// Lightweight model used by the "Clean up" action (grammar fix + humanizer).
+export const DEFAULT_CLEANUP_MODEL = "claude-haiku-4-5";
+
 export const MODELS = [
   { id: "claude-sonnet-4-6", label: "Sonnet 4.6 (default)" },
   { id: "claude-opus-4-8", label: "Opus 4.8" },
@@ -15,6 +18,10 @@ export const MODELS = [
 export type Effort = "low" | "medium" | "high";
 
 export type Engine = "claude" | "gemini";
+
+// A tab is either a general "ask the vault" conversation (default) or the
+// job-application workflow (the original tool).
+export type TabMode = "ask" | "job";
 
 export const ENGINES = [
   { id: "claude", label: "Claude Code (default)" },
@@ -31,6 +38,7 @@ export const REASONING: Record<Effort, number> = {
 export interface Settings {
   engine: Engine;
   model: string;
+  cleanupModel: string;
   effort: Effort;
   humanize: boolean;
   rag: boolean;
@@ -54,10 +62,24 @@ OUTPUT
 - Tailor the answer to the provided job description and to the specific question asked.
 - Use the length a thoughtful applicant would actually write, unless the question implies a specific length.`;
 
+// Ask mode: a general assistant answering questions grounded in JJ's vault. No
+// job-application framing, no first-person impersonation — just accurate answers.
+export const ASK_PERSONA = `You are a helpful assistant answering questions grounded in JJ McCauley's personal Obsidian knowledge vault. The working directory is that vault.
+
+GROUNDING
+- Read whatever files you need to answer accurately (Background, Goals, Projects, Leadership-Examples, Personal-Skills, QnA, Resumes, and the root example answers).
+- Base every claim on what the vault actually says. Never invent facts, projects, metrics, or dates. If the vault does not cover something, say so plainly instead of guessing.
+
+OUTPUT
+- Answer the question directly and concisely in a natural, clear voice.
+- Output ONLY the answer: no preamble, no "I hope this helps", no meta commentary, and no notes about which files you read.
+- Use whatever length and structure (prose, short lists) best fits the question.`;
+
 export function defaultSettings(vaultDir = DEFAULT_VAULT): Settings {
   return {
     engine: "claude",
     model: DEFAULT_MODEL,
+    cleanupModel: DEFAULT_CLEANUP_MODEL,
     effort: "medium",
     humanize: true,
     rag: false,
@@ -70,13 +92,17 @@ export function defaultSettings(vaultDir = DEFAULT_VAULT): Settings {
 
 interface BuildArgs {
   persona: string;
+  mode: TabMode;
   useYc?: boolean;
   useRag?: boolean;
   phase: "draft" | "humanize" | "followup";
 }
 
 // Compose the system-prompt append from the base persona plus phase/mode notes.
-export function buildAppend({ persona, useYc, useRag, phase }: BuildArgs): string {
+// Ask mode is a single grounded answer turn: it skips the YC and humanize notes
+// (those belong to the job-application pipeline).
+export function buildAppend({ persona, mode, useYc, useRag, phase }: BuildArgs): string {
+  const isAsk = mode === "ask";
   const parts = [persona.trim()];
 
   if (useRag) {
@@ -85,13 +111,13 @@ export function buildAppend({ persona, useYc, useRag, phase }: BuildArgs): strin
     );
   }
 
-  if (useYc) {
+  if (!isAsk && useYc) {
     parts.push(
       `Y COMBINATOR\n- This answer is for a Y Combinator application. Use the yc-combinator skill to shape the structure and tone: direct, concrete, founder-style, no fluff.`
     );
   }
 
-  if (phase === "humanize") {
+  if (!isAsk && phase === "humanize") {
     parts.push(
       `HUMANIZE PASS\n- Use the humanizer skill on your previous answer. Return ONLY the final humanized version of the answer text: no drafts, no audit notes, no commentary, no "still-AI" bullets.`
     );
@@ -99,11 +125,32 @@ export function buildAppend({ persona, useYc, useRag, phase }: BuildArgs): strin
 
   if (phase === "followup") {
     parts.push(
-      `REVISION\n- You are revising the existing answer based on the user's requested tweak. Apply their change and return the FULL revised answer, keeping the same grounded first-person voice and avoiding AI-writing tells. Output only the revised answer.`
+      isAsk
+        ? `REVISION\n- You are revising your previous answer based on the user's requested change. Apply it and return the FULL revised answer, staying grounded in the vault. Output only the revised answer.`
+        : `REVISION\n- You are revising the existing answer based on the user's requested tweak. Apply their change and return the FULL revised answer, keeping the same grounded first-person voice and avoiding AI-writing tells. Output only the revised answer.`
     );
   }
 
   return parts.join("\n\n");
+}
+
+// ---- Ask mode prompts (general vault Q&A) ----
+export function buildAskPrompt(question: string): string {
+  return `Question:
+"""
+${question.trim()}
+"""
+
+Answer the question above, grounded in the vault.`;
+}
+
+// RAG ask prompt (Claude engine): retrieved excerpts are the only facts available.
+export function buildRagAskPrompt(context: string, question: string): string {
+  return `${contextBlock(context)}\n\n${buildAskPrompt(question)}\n\nGround your answer ONLY in the vault excerpts above. Do not read or search additional files.`;
+}
+
+export function buildGeminiAskPrompt(persona: string, context: string, question: string): string {
+  return `${persona.trim()}\n\n${contextBlock(context)}\n\n${buildAskPrompt(question)}\n\n${NO_TOOLS}`;
 }
 
 export function buildDraftPrompt(jobDescription: string, question: string): string {
@@ -162,6 +209,32 @@ export function buildGeminiDraftPrompt(
 
 export function buildGeminiHumanizePrompt(draft: string): string {
   return `${HUMANIZE_INLINE}\n\nAnswer to rewrite:\n"""\n${draft.trim()}\n"""\n\nDo not use any tools or run any commands; just return the rewritten answer.`;
+}
+
+// ---- Clean up (lightweight grammar fix + humanize) ----
+// Used by the answer card's "Clean up" button. Operates on the exact text the
+// user currently has (including any manual edits), independent of any session.
+
+const CLEANUP_GRAMMAR = `Fix any spelling, grammar, punctuation, and awkward phrasing in the text below. Preserve every fact and the original meaning; do not add new information.`;
+
+// Claude engine: when the humanizer skill is installed we run it; otherwise we
+// fold the inline humanize rules into the prompt (a missing skill does nothing).
+export function buildCleanupPrompt(text: string, useSkill: boolean): string {
+  const polish = useSkill
+    ? `Then apply the humanizer skill to remove any signs of AI writing.`
+    : HUMANIZE_INLINE;
+  return `${CLEANUP_GRAMMAR}\n\n${polish}\n\nText to clean up:\n"""\n${text.trim()}\n"""\n\nReturn ONLY the cleaned text — no commentary, no notes, no headings.`;
+}
+
+export function buildCleanupAppend(useSkill: boolean): string {
+  return useSkill
+    ? `CLEANUP PASS\n- Fix grammar and writing in the provided text, then use the humanizer skill on it. Return ONLY the final cleaned text: no drafts, no audit notes, no commentary.`
+    : `CLEANUP PASS\n- Fix grammar and writing in the provided text and remove signs of AI writing. Return ONLY the final cleaned text: no commentary, no notes.`;
+}
+
+// Gemini engine has no Skill tool, so cleanup always uses the inline rules.
+export function buildGeminiCleanupPrompt(text: string): string {
+  return `${CLEANUP_GRAMMAR}\n${HUMANIZE_INLINE}\n\nText to clean up:\n"""\n${text.trim()}\n"""\n\nDo not use any tools or run any commands; return ONLY the cleaned text.`;
 }
 
 export function buildGeminiFollowupPrompt(
