@@ -9,6 +9,12 @@ export const FUN_VARIANTS = [
   { id: "waves", label: "Waves" },
   { id: "dots", label: "Dot Grid" },
   { id: "mesh", label: "Mesh" },
+  { id: "matrix", label: "Matrix Rain" },
+  { id: "starfield", label: "Starfield" },
+  { id: "grid3d", label: "3D Grid" },
+  { id: "flicker", label: "Flickering Grid" },
+  { id: "comet", label: "Shooting Stars" },
+  { id: "balatro", label: "Balatro" },
 ] as const;
 
 export type FunVariant = (typeof FUN_VARIANTS)[number]["id"];
@@ -24,7 +30,30 @@ export function funLabel(v: FunVariant): string {
 
 const isDark = () => (document.documentElement.dataset.theme ?? "dark") !== "light";
 
-// Canvas scenes (particles, waves). CSS scenes are handled with plain divs.
+// HSL to RGB helper for Balatro shader
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  let r, g, b;
+  if (s === 0) {
+    r = g = b = l; // achromatic
+  } else {
+    const hue2rgb = (p: number, q: number, t: number) => {
+      if (t < 0) t += 1;
+      if (t > 1) t -= 1;
+      if (t < 1/6) return p + (q - p) * 6 * t;
+      if (t < 1/2) return q;
+      if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+      return p;
+    };
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    r = hue2rgb(p, q, h + 1/3);
+    g = hue2rgb(p, q, h);
+    b = hue2rgb(p, q, h - 1/3);
+  }
+  return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+}
+
+// Canvas scenes. CSS scenes are handled with plain divs.
 function useCanvasScene(variant: FunVariant) {
   const ref = useRef<HTMLCanvasElement | null>(null);
 
@@ -40,7 +69,13 @@ function useCanvasScene(variant: FunVariant) {
     let t = 0;
     let w = 0;
     let h = 0;
+
+    // State variables for various effects
     let particles: { x: number; y: number; vx: number; vy: number; r: number }[] = [];
+    let matrixDrops: number[] = [];
+    let stars: { x: number; y: number; z: number }[] = [];
+    let flickerSquares: { x: number; y: number; w: number; h: number; alpha: number; targetAlpha: number; speed: number }[] = [];
+    let comets: { x: number; y: number; len: number; speed: number; angle: number }[] = [];
 
     const initParticles = () => {
       const count = Math.round(Math.min(110, (w * h) / 15000));
@@ -53,13 +88,66 @@ function useCanvasScene(variant: FunVariant) {
       }));
     };
 
+    const initMatrix = () => {
+      const columns = Math.floor(w / 14) + 1;
+      matrixDrops = Array.from({ length: columns }, () => Math.random() * -100);
+    };
+
+    const initStarfield = () => {
+      const count = 120;
+      stars = Array.from({ length: count }, () => ({
+        x: (Math.random() - 0.5) * w,
+        y: (Math.random() - 0.5) * h,
+        z: Math.random() * w,
+      }));
+    };
+
+    const initFlicker = () => {
+      const cols = Math.floor(w / 40) + 1;
+      const rows = Math.floor(h / 40) + 1;
+      flickerSquares = [];
+      for (let c = 0; c < cols; c++) {
+        for (let r = 0; r < rows; r++) {
+          flickerSquares.push({
+            x: c * 40 + 4,
+            y: r * 40 + 4,
+            w: 32,
+            h: 32,
+            alpha: Math.random() * 0.08,
+            targetAlpha: Math.random() * 0.08,
+            speed: Math.random() * 0.005 + 0.002,
+          });
+        }
+      }
+    };
+
+    const initComets = () => {
+      comets = Array.from({ length: 6 }, () => ({
+        x: Math.random() * w,
+        y: Math.random() * -h,
+        len: Math.random() * 60 + 30,
+        speed: Math.random() * 3 + 1.5,
+        angle: Math.PI / 4,
+      }));
+    };
+
     const resize = () => {
       w = canvas.clientWidth;
       h = canvas.clientHeight;
-      canvas.width = Math.max(1, Math.floor(w * dpr));
-      canvas.height = Math.max(1, Math.floor(h * dpr));
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      if (variant === "balatro") {
+        canvas.width = 120;
+        canvas.height = 90;
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+      } else {
+        canvas.width = Math.max(1, Math.floor(w * dpr));
+        canvas.height = Math.max(1, Math.floor(h * dpr));
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
       if (variant === "particles") initParticles();
+      else if (variant === "matrix") initMatrix();
+      else if (variant === "starfield") initStarfield();
+      else if (variant === "flicker") initFlicker();
+      else if (variant === "comet") initComets();
     };
 
     const drawParticles = () => {
@@ -123,10 +211,140 @@ function useCanvasScene(variant: FunVariant) {
       }
     };
 
+    const drawMatrix = () => {
+      ctx.fillStyle = isDark() ? "rgba(10, 10, 10, 0.08)" : "rgba(240, 244, 248, 0.08)";
+      ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = isDark() ? "rgba(99, 230, 190, 0.35)" : "rgba(45, 160, 140, 0.35)";
+      ctx.font = "12px monospace";
+      for (let i = 0; i < matrixDrops.length; i++) {
+        const char = String.fromCharCode(33 + Math.floor(Math.random() * 93));
+        const x = i * 14;
+        const y = matrixDrops[i] * 14;
+        ctx.fillText(char, x, y);
+        if (y > h && Math.random() > 0.975) {
+          matrixDrops[i] = 0;
+        } else {
+          matrixDrops[i]++;
+        }
+      }
+    };
+
+    const drawStarfield = () => {
+      ctx.clearRect(0, 0, w, h);
+      const color = isDark() ? "255, 255, 255" : "10, 10, 10";
+      const cx = w / 2;
+      const cy = h / 2;
+      for (const s of stars) {
+        s.z -= 1.2;
+        if (s.z <= 0) {
+          s.x = (Math.random() - 0.5) * w;
+          s.y = (Math.random() - 0.5) * h;
+          s.z = w;
+        }
+        const px = (s.x / s.z) * w + cx;
+        const py = (s.y / s.z) * h + cy;
+        if (px >= 0 && px <= w && py >= 0 && py <= h) {
+          const size = (1 - s.z / w) * 2;
+          const alpha = (1 - s.z / w) * 0.5;
+          ctx.fillStyle = `rgba(${color}, ${alpha})`;
+          ctx.beginPath();
+          ctx.arc(px, py, size, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    };
+
+    const drawFlicker = () => {
+      ctx.clearRect(0, 0, w, h);
+      const baseColor = isDark() ? "110, 168, 254" : "75, 123, 236";
+      for (const sq of flickerSquares) {
+        if (Math.abs(sq.alpha - sq.targetAlpha) < 0.005) {
+          sq.targetAlpha = Math.random() * 0.08;
+        }
+        sq.alpha += (sq.targetAlpha - sq.alpha) * sq.speed;
+        ctx.fillStyle = `rgba(${baseColor}, ${sq.alpha})`;
+        ctx.fillRect(sq.x, sq.y, sq.w, sq.h);
+      }
+    };
+
+    const drawComets = () => {
+      ctx.clearRect(0, 0, w, h);
+      ctx.lineWidth = 1.5;
+      const color = isDark() ? "167, 139, 250" : "138, 99, 250";
+      for (const c of comets) {
+        c.x += c.speed * Math.cos(c.angle);
+        c.y += c.speed * Math.sin(c.angle);
+        if (c.x > w || c.y > h) {
+          c.x = Math.random() * w * 0.5;
+          c.y = Math.random() * -100;
+          c.speed = Math.random() * 3 + 1.5;
+        }
+        const grad = ctx.createLinearGradient(
+          c.x - c.len * Math.cos(c.angle),
+          c.y - c.len * Math.sin(c.angle),
+          c.x,
+          c.y
+        );
+        grad.addColorStop(0, `rgba(${color}, 0)`);
+        grad.addColorStop(1, `rgba(${color}, 0.3)`);
+        ctx.strokeStyle = grad;
+        ctx.beginPath();
+        ctx.moveTo(c.x - c.len * Math.cos(c.angle), c.y - c.len * Math.sin(c.angle));
+        ctx.lineTo(c.x, c.y);
+        ctx.stroke();
+      }
+    };
+
+    const drawBalatro = () => {
+      const cw = 120;
+      const ch = 90;
+      const imgData = ctx.createImageData(cw, ch);
+      const data = imgData.data;
+      const time = t * 0.0018;
+      const dark = isDark();
+
+      for (let y = 0; y < ch; y++) {
+        for (let x = 0; x < cw; x++) {
+          const nx = x / cw - 0.5;
+          const ny = y / ch - 0.5;
+
+          const cx = nx + 0.4 * Math.sin(time * 0.4);
+          const cy = ny + 0.4 * Math.cos(time * 0.3);
+          const dist = Math.sqrt(cx * cx + cy * cy);
+
+          let v = Math.sin(nx * 6.0 + time) +
+                  Math.sin(8.0 * (nx * Math.sin(time * 0.2) + ny * Math.cos(time * 0.3)) + time) +
+                  Math.sin(dist * 12.0 - time);
+
+          v = v / 3.0; // scale to [-1, 1]
+
+          // Balatro theme palette mapping: HSL rotation
+          // Accent hues centered at neon red/pink/orange/purple
+          const hue = (v * 60 + time * 15 + 320) % 360;
+          const sat = dark ? 0.72 : 0.85;
+          // Subdued lightness to keep foreground text highly readable
+          const light = dark ? 0.16 + v * 0.06 : 0.78 + v * 0.08;
+
+          const [r, g, b] = hslToRgb(hue / 360, sat, light);
+          const idx = (y * cw + x) * 4;
+          data[idx] = r;
+          data[idx + 1] = g;
+          data[idx + 2] = b;
+          data[idx + 3] = dark ? 255 : 120; // translucent for light theme
+        }
+      }
+      ctx.putImageData(imgData, 0, 0);
+    };
+
     const frame = () => {
       t += 16;
       if (variant === "particles") drawParticles();
       else if (variant === "waves") drawWaves();
+      else if (variant === "matrix") drawMatrix();
+      else if (variant === "starfield") drawStarfield();
+      else if (variant === "flicker") drawFlicker();
+      else if (variant === "comet") drawComets();
+      else if (variant === "balatro") drawBalatro();
       if (!reduce) raf = requestAnimationFrame(frame);
     };
 
@@ -145,7 +363,7 @@ function useCanvasScene(variant: FunVariant) {
 }
 
 export function FunBackground({ variant }: { variant: FunVariant }) {
-  const isCanvas = variant === "particles" || variant === "waves";
+  const isCanvas = variant === "particles" || variant === "waves" || variant === "matrix" || variant === "starfield" || variant === "flicker" || variant === "comet" || variant === "balatro";
   const ref = useCanvasScene(variant);
 
   return (

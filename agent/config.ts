@@ -17,15 +17,18 @@ export const MODELS = [
 
 export type Effort = "low" | "medium" | "high";
 
-export type Engine = "claude" | "gemini";
+export type Engine = "claude" | "gemini" | "opencode" | "cursor" | "copilot";
 
-// A tab is either a general "ask the vault" conversation (default) or the
-// job-application workflow (the original tool).
-export type TabMode = "ask" | "job";
+// A tab is either a general "ask the vault" conversation (default), the
+// job-application workflow, or a vault writer.
+export type TabMode = "ask" | "job" | "write";
 
 export const ENGINES = [
   { id: "claude", label: "Claude Code (default)" },
   { id: "gemini", label: "Gemini Antigravity (agy)" },
+  { id: "opencode", label: "OpenCode" },
+  { id: "cursor", label: "Cursor Agent" },
+  { id: "copilot", label: "GitHub Copilot" },
 ];
 
 // "medium reasoning" maps to a medium thinking budget.
@@ -46,6 +49,7 @@ export interface Settings {
   persona: string;
   vaultDir: string;
   extraDirs: string[];
+  urlFetchMethod?: string;
 }
 
 export const DEFAULT_PERSONA = `You are writing a job-application answer on behalf of JJ McCauley, a software engineer. You are not a generic assistant: you produce the exact answer text JJ would submit, written in the first person ("I").
@@ -149,7 +153,7 @@ export function buildRagAskPrompt(context: string, question: string): string {
   return `${contextBlock(context)}\n\n${buildAskPrompt(question)}\n\nGround your answer ONLY in the vault excerpts above. Do not read or search additional files.`;
 }
 
-export function buildGeminiAskPrompt(persona: string, context: string, question: string): string {
+export function buildCliAskPrompt(persona: string, context: string, question: string): string {
   return `${persona.trim()}\n\n${contextBlock(context)}\n\n${buildAskPrompt(question)}\n\n${NO_TOOLS}`;
 }
 
@@ -192,13 +196,13 @@ export const HUMANIZE_INLINE = `Rewrite the answer below to remove all signs of 
 - Keep it concrete and specific.
 Output ONLY the rewritten answer.`;
 
-const NO_TOOLS = `Do not use any tools, do not run any shell commands, and do not read or write any files. Use ONLY the VAULT CONTEXT provided above as your source of facts.`;
+export const NO_TOOLS = `Do not use any tools, do not run any shell commands, and do not read or write any files. Use ONLY the VAULT CONTEXT provided above as your source of facts.`;
 
 export function contextBlock(context: string): string {
   return `VAULT CONTEXT (read-only — your only source of facts):\n"""\n${context.trim() || "(none provided)"}\n"""`;
 }
 
-export function buildGeminiDraftPrompt(
+export function buildCliDraftPrompt(
   persona: string,
   context: string,
   jobDescription: string,
@@ -207,7 +211,7 @@ export function buildGeminiDraftPrompt(
   return `${persona.trim()}\n\n${contextBlock(context)}\n\n${buildDraftPrompt(jobDescription, question)}\n\n${NO_TOOLS}`;
 }
 
-export function buildGeminiHumanizePrompt(draft: string): string {
+export function buildCliHumanizePrompt(draft: string): string {
   return `${HUMANIZE_INLINE}\n\nAnswer to rewrite:\n"""\n${draft.trim()}\n"""\n\nDo not use any tools or run any commands; just return the rewritten answer.`;
 }
 
@@ -233,11 +237,11 @@ export function buildCleanupAppend(useSkill: boolean): string {
 }
 
 // Gemini engine has no Skill tool, so cleanup always uses the inline rules.
-export function buildGeminiCleanupPrompt(text: string): string {
+export function buildCliCleanupPrompt(text: string): string {
   return `${CLEANUP_GRAMMAR}\n${HUMANIZE_INLINE}\n\nText to clean up:\n"""\n${text.trim()}\n"""\n\nDo not use any tools or run any commands; return ONLY the cleaned text.`;
 }
 
-export function buildGeminiFollowupPrompt(
+export function buildCliFollowupPrompt(
   persona: string,
   context: string,
   priorAnswer: string,
@@ -255,6 +259,90 @@ ${priorAnswer.trim()}
 The user wants this change: ${tweak.trim()}
 
 Apply the change and return the FULL revised answer, grounded in the context above and written in a natural first-person voice with no AI-writing tells. Output ONLY the answer.
+
+${NO_TOOLS}`;
+}
+
+// ---- Vault Writer prompts ----
+
+export function buildSummarizePrompt(text: string, vaultContext: string): string {
+  return `You are summarizing content for a personal knowledge vault.
+
+${contextBlock(vaultContext)}
+
+Content to summarize:
+"""
+${text.trim()}
+"""
+
+Produce a clear, well-structured markdown summary of the content above. Use headings, bullet points, and key takeaways where appropriate. The summary should integrate well with the existing vault context. Output ONLY the markdown summary — no commentary.
+
+${NO_TOOLS}`;
+}
+
+export function buildAutoPlacePrompt(content: string, vaultStructure: string): string {
+  return `You are analyzing a personal knowledge vault to determine the best location for new content.
+
+Vault directory structure:
+"""
+${vaultStructure.trim()}
+"""
+
+New content to place:
+"""
+${content.trim().slice(0, 2000)}
+"""
+
+Based on the vault structure and content topic, suggest the single best file path (relative to the vault root) where this content should be saved. The path should use an existing directory if one fits, or suggest a new subdirectory under an appropriate parent. Use .md extension.
+
+Respond with ONLY the file path, nothing else. Example: JJ-master/Projects/new-project.md
+
+${NO_TOOLS}`;
+}
+
+export function buildFillinScanPrompt(vaultContext: string, prompt?: string): string {
+  const focus = prompt ? `\nThe user wants to focus on: ${prompt.trim()}` : '';
+  return `You are analyzing a personal knowledge vault to find gaps and missing information.${focus}
+
+${contextBlock(vaultContext)}
+
+Analyze the vault content above and identify up to 5 specific pieces of missing information, incomplete sections, or topics that would benefit from being documented. For each gap, write a clear, specific question that the user can answer to fill it in.
+
+Respond with a JSON array of objects, each with "question" (the question to ask) and "targetPath" (suggested vault file path for the answer). Example:
+[{"question": "What technologies did you use in the XYZ project?", "targetPath": "JJ-master/Projects/xyz.md"}]
+
+Output ONLY the JSON array, no commentary or markdown fencing.
+
+${NO_TOOLS}`;
+}
+
+export function buildFillinAnswerPrompt(vaultContext: string, question: string, answer: string, targetPath: string): string {
+  return `You are formatting a user's answer into a well-structured vault entry.
+
+${contextBlock(vaultContext)}
+
+Question that was asked: ${question.trim()}
+User's answer: ${answer.trim()}
+Target file: ${targetPath}
+
+Format the user's answer into clean, well-structured markdown that fits naturally into the vault. If the target file already has content in the vault context, format this as an addition/update. Use appropriate headings, bullet points, and formatting.
+
+Output ONLY the formatted markdown content — no commentary, no file path, no fencing.
+
+${NO_TOOLS}`;
+}
+
+export function buildWriteCleanupPrompt(text: string): string {
+  return `Clean up and format the following text into well-structured markdown for a personal knowledge vault.
+
+Text to clean up:
+"""
+${text.trim()}
+"""
+
+Fix any spelling, grammar, and punctuation errors. Improve the structure with appropriate markdown headings, bullet points, and formatting. Preserve all factual content and meaning.
+
+Output ONLY the cleaned markdown — no commentary.
 
 ${NO_TOOLS}`;
 }

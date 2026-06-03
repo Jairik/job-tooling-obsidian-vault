@@ -1,3 +1,6 @@
+// Renders a tab's answer: a phase status pill, the live streaming text (which
+// becomes an editable textarea once the run finishes), copy / regenerate / clean-up
+// actions, and — in job mode — a collapsible view of the original pre-humanize draft.
 import { useState } from "react";
 import type { Phase, TabMode } from "../lib/store";
 

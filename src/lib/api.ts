@@ -66,11 +66,27 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     }).then((r) => r.json()),
-  skills: (vault: string): Promise<{ yc: boolean; humanizer: boolean; gemini: boolean }> =>
+  skills: (vault: string): Promise<{ yc: boolean; humanizer: boolean; gemini: boolean; opencode: boolean; cursor: boolean; copilot: boolean }> =>
     fetch(`/api/skills/status?vault=${encodeURIComponent(vault)}`).then((r) => r.json()),
   validateVault: (
     path: string
   ): Promise<{ valid: boolean; isDir: boolean; foundDirs: string[]; message?: string }> =>
     fetch(`/api/vault/validate?path=${encodeURIComponent(path)}`).then((r) => r.json()),
   cancel: (id: string): Promise<unknown> => fetch(`/api/tabs/${id}/cancel`, { method: "POST" }),
+
+  // Vault Writer APIs
+  vaultTree: (vault: string): Promise<any[]> =>
+    fetch(`/api/vault/tree?path=${encodeURIComponent(vault)}`).then((r) => r.json()),
+  vaultWrite: (path: string, content: string): Promise<{ ok: boolean; path: string }> =>
+    fetch("/api/vault/write", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, content }),
+    }).then((r) => r.json()),
+  fetchUrl: (url: string, method = "basic"): Promise<{ text: string; title: string; error?: string }> =>
+    fetch("/api/fetch-url", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url, method }),
+    }).then((r) => r.json()),
 };

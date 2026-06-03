@@ -1,3 +1,6 @@
+// Logs modal: a read-only view over the local activity log (generations,
+// follow-ups, answers, tool calls, errors) — a chronological list plus a few
+// recharts summaries. onClear wipes the log; nothing here mutates it otherwise.
 import { useMemo } from "react";
 import {
   ResponsiveContainer,

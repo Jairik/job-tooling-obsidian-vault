@@ -1,21 +1,31 @@
+// Root component. Owns the global state — the open tabs, the merged settings,
+// design/theme prefs, the activity log, split-view layout — and persists it to
+// localStorage (and the server for settings). It also drives every backend call:
+// each run* handler opens an SSE stream to the per-tab API and folds the streamed
+// phase / text / activity / done / error events back into that tab's state.
 import { useEffect, useRef, useState } from "react";
 import {
   loadTabs,
   saveTabs,
   loadSettings,
   saveSettings,
+  loadDesignSettings,
+  saveDesignSettings,
   newTab,
   cloneTabForNewQuestion,
+  overrideSettingsBody,
   deriveTitleLocal,
   loadLogs,
   saveLogs,
   clearLogs,
   uid,
   LOG_CAP,
+  DEFAULT_DESIGN,
   type Settings,
   type Tab,
   type TabMode,
   type LogEntry,
+  type DesignSettings,
 } from "./lib/store";
 import { api, streamPost, type ModelOption } from "./lib/api";
 import { TabBar } from "./components/TabBar";
@@ -23,7 +33,7 @@ import { TabView } from "./components/TabView";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { QuickNotes } from "./components/QuickNotes";
 import { LogsModal } from "./components/LogsModal";
-import { FunBackground, nextFunVariant, funLabel, type FunVariant } from "./components/FunBackground";
+import { FunBackground } from "./components/FunBackground";
 
 function readLS(key: string): string | null {
   try {
@@ -50,10 +60,11 @@ export function App() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [engines, setEngines] = useState<ModelOption[]>([]);
-  const [skills, setSkills] = useState({ yc: false, humanizer: false, gemini: false });
+  const [skills, setSkills] = useState({ yc: false, humanizer: false, gemini: false, opencode: false, cursor: false, copilot: false });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
+  const [toolbarDropOpen, setToolbarDropOpen] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>(() => loadLogs());
   const [theme, setTheme] = useState<"dark" | "light">(
     () => (document.documentElement.dataset.theme as "dark" | "light") || "dark"
@@ -61,10 +72,7 @@ export function App() {
   const [density, setDensity] = useState<"comfortable" | "compact">(
     () => (document.documentElement.dataset.density as "comfortable" | "compact") || "comfortable"
   );
-  const [fun, setFun] = useState<boolean>(() => readLS("jt.fun") === "on");
-  const [funVariant, setFunVariant] = useState<FunVariant>(
-    () => (readLS("jt.funbg") as FunVariant) || "aurora"
-  );
+  const [design, setDesign] = useState<DesignSettings>(() => loadDesignSettings());
   const [split, setSplit] = useState<boolean>(() => readLS("jt.split") === "on");
   const [rightId, setRightId] = useState<string>("");
   // Mode new tabs open in. Defaults to Ask; persisted like the other UI prefs.
@@ -93,16 +101,39 @@ export function App() {
     }
   }, [density]);
 
-  // Fun mode (animated background) + its current variant.
+  // Design settings: persist and apply to <html> dataset.
   useEffect(() => {
-    if (fun) document.documentElement.dataset.fun = "on";
-    else delete document.documentElement.dataset.fun;
-    writeLS("jt.fun", fun ? "on" : "off");
-  }, [fun]);
+    saveDesignSettings(design);
 
-  useEffect(() => {
-    writeLS("jt.funbg", funVariant);
-  }, [funVariant]);
+    const el = document.documentElement;
+
+    // Fun mode
+    if (design.funEnabled) el.dataset.fun = "on";
+    else delete el.dataset.fun;
+
+    // Font family
+    if (design.fontFamily !== "system") {
+      el.dataset.fontFamily = design.fontFamily;
+    } else {
+      delete el.dataset.fontFamily;
+    }
+
+    // Font scale via CSS custom property
+    el.style.setProperty("--font-scale", String(design.fontScale));
+
+    // Accent color
+    el.dataset.accentHue = String(design.accentHue);
+    el.dataset.accentChroma = String(design.accentChroma);
+
+    // Border radius
+    el.dataset.radius = design.borderRadius;
+
+    // Spacing
+    el.dataset.spacing = design.spacingScale;
+
+    // Shadows
+    el.dataset.shadow = design.shadowIntensity;
+  }, [design]);
 
   // Split view persistence.
   useEffect(() => {
@@ -162,6 +193,10 @@ export function App() {
     });
   };
 
+  const changeDesign = (patch: Partial<DesignSettings>) => {
+    setDesign((prev) => ({ ...prev, ...patch }));
+  };
+
   const addTab = () => {
     const t = newTab(tabs, settings?.rag ?? false, defaultMode);
     setTabs((prev) => [...prev, t]);
@@ -207,7 +242,7 @@ export function App() {
       if (title) updateTab(tab.id, (t) => (t.autoNamed ? { name: title } : {}));
     }
 
-    const overrideBody = tab.overrideEnabled ? tab.override : undefined;
+    const overrideBody = overrideSettingsBody(tab, settings);
     const eff = tab.overrideEnabled ? tab.override ?? settings : settings;
     const meta = { tabId: tab.id, tabName: tab.name, tabColor: tab.color };
     const startedAt = Date.now();
@@ -273,7 +308,7 @@ export function App() {
       answer: "",
       error: undefined,
     }));
-    const overrideBody = tab.overrideEnabled ? tab.override : undefined;
+    const overrideBody = overrideSettingsBody(tab, settings);
     const eff = tab.overrideEnabled ? tab.override ?? settings : settings;
     const meta = { tabId: tab.id, tabName: tab.name, tabColor: tab.color };
     const startedAt = Date.now();
@@ -337,7 +372,7 @@ export function App() {
     controllers.current.set(tab.id, controller);
     updateTab(tab.id, { phase: "cleanup", activity: [], answer: "", error: undefined, notice: undefined });
 
-    const overrideBody = tab.overrideEnabled ? tab.override : undefined;
+    const overrideBody = overrideSettingsBody(tab, settings);
     const eff = tab.overrideEnabled ? tab.override ?? settings : settings;
     const meta = { tabId: tab.id, tabName: tab.name, tabColor: tab.color };
     const startedAt = Date.now();
@@ -391,6 +426,194 @@ export function App() {
     api.cancel(id).catch(() => {});
   };
 
+  // ── Vault Writer Handlers ─────────────────────────────────────────────────
+
+  const runSummarize = async (tab: Tab) => {
+    if (!settings) return;
+    controllers.current.get(tab.id)?.abort();
+    const controller = new AbortController();
+    controllers.current.set(tab.id, controller);
+    
+    updateTab(tab.id, { phase: "draft", error: undefined, writePreview: "", writeConfirmed: false });
+    
+    const input = tab.writeInput.trim();
+    const isUrl = /^https?:\/\//i.test(input);
+    let finalInput = input;
+    
+    if (isUrl) {
+      try {
+        const res = await api.fetchUrl(input, settings.urlFetchMethod);
+        if (res.error) throw new Error(res.error);
+        finalInput = res.text;
+      } catch (err: any) {
+        updateTab(tab.id, { phase: "error", error: err.message });
+        controllers.current.delete(tab.id);
+        return;
+      }
+    }
+    
+    const overrideBody = overrideSettingsBody(tab, settings);
+    
+    streamPost(
+      `/api/tabs/${tab.id}/summarize`,
+      { input: finalInput, isUrl, settings: overrideBody },
+      {
+        phase: (d) => updateTab(tab.id, { phase: d.phase }),
+        text: (d) => updateTab(tab.id, (t) => ({ writePreview: (t.writePreview || "") + d.delta })),
+        done: (d) => updateTab(tab.id, { phase: "done", writePreview: d.text }),
+        error: (d) => updateTab(tab.id, { phase: "error", error: d.message }),
+      },
+      controller.signal
+    ).catch((e) => {
+      if (!controller.signal.aborted) updateTab(tab.id, { phase: "error", error: String(e) });
+    }).finally(() => controllers.current.delete(tab.id));
+  };
+
+  const runAutoPlace = (tab: Tab) => {
+    if (!settings) return;
+    controllers.current.get(tab.id)?.abort();
+    const controller = new AbortController();
+    controllers.current.set(tab.id, controller);
+    
+    updateTab(tab.id, { phase: "draft", error: undefined, writeConfirmed: false });
+    const overrideBody = overrideSettingsBody(tab, settings);
+    
+    streamPost(
+      `/api/tabs/${tab.id}/auto-place`,
+      { content: tab.writeInput, settings: overrideBody },
+      {
+        phase: (d) => updateTab(tab.id, { phase: d.phase }),
+        done: (d) => updateTab(tab.id, { phase: "done", writePath: d.text }),
+        error: (d) => updateTab(tab.id, { phase: "error", error: d.message }),
+      },
+      controller.signal
+    ).catch((e) => {
+      if (!controller.signal.aborted) updateTab(tab.id, { phase: "error", error: String(e) });
+    }).finally(() => controllers.current.delete(tab.id));
+  };
+
+  const runFillinScan = (tab: Tab) => {
+    if (!settings) return;
+    controllers.current.get(tab.id)?.abort();
+    const controller = new AbortController();
+    controllers.current.set(tab.id, controller);
+    
+    updateTab(tab.id, { phase: "draft", error: undefined, writeConfirmed: false });
+    const overrideBody = overrideSettingsBody(tab, settings);
+    
+    streamPost(
+      `/api/tabs/${tab.id}/fillin-scan`,
+      { prompt: tab.writeInput, dir: tab.fillinDir, settings: overrideBody },
+      {
+        phase: (d) => updateTab(tab.id, { phase: d.phase }),
+        done: (d) => {
+          try {
+            const raw = d.text.trim();
+            const firstBracket = raw.indexOf('[');
+            const lastBracket = raw.lastIndexOf(']');
+            if (firstBracket === -1 || lastBracket === -1) throw new Error("Invalid JSON returned");
+            const qs = JSON.parse(raw.substring(firstBracket, lastBracket + 1));
+            updateTab(tab.id, { phase: "done", fillinQuestions: qs.map((q: any) => ({ ...q, id: uid(), answer: "", written: false })) });
+          } catch (err: any) {
+            updateTab(tab.id, { phase: "error", error: "Failed to parse questions: " + err.message });
+          }
+        },
+        error: (d) => updateTab(tab.id, { phase: "error", error: d.message }),
+      },
+      controller.signal
+    ).catch((e) => {
+      if (!controller.signal.aborted) updateTab(tab.id, { phase: "error", error: String(e) });
+    }).finally(() => controllers.current.delete(tab.id));
+  };
+
+  const runFillinWrite = (tab: Tab, questionId: string) => {
+    if (!settings) return;
+    const q = tab.fillinQuestions?.find(x => x.id === questionId);
+    if (!q) return;
+    
+    controllers.current.get(tab.id)?.abort();
+    const controller = new AbortController();
+    controllers.current.set(tab.id, controller);
+    
+    updateTab(tab.id, (t) => ({
+      phase: "draft", error: undefined, writeConfirmed: false,
+      fillinQuestions: t.fillinQuestions?.map(xq => xq.id === questionId ? { ...xq, preview: "" } : xq)
+    }));
+    const overrideBody = overrideSettingsBody(tab, settings);
+    
+    streamPost(
+      `/api/tabs/${tab.id}/fillin-write`,
+      { question: q.question, answer: q.answer, targetPath: q.targetPath, settings: overrideBody },
+      {
+        phase: (d) => updateTab(tab.id, { phase: d.phase }),
+        text: (d) => updateTab(tab.id, (t) => ({
+          fillinQuestions: t.fillinQuestions?.map(xq => xq.id === questionId ? { ...xq, preview: (xq.preview || "") + d.delta } : xq)
+        })),
+        done: (d) => updateTab(tab.id, (t) => ({
+          phase: "done",
+          fillinQuestions: t.fillinQuestions?.map(xq => xq.id === questionId ? { ...xq, preview: d.text } : xq)
+        })),
+        error: (d) => updateTab(tab.id, { phase: "error", error: d.message }),
+      },
+      controller.signal
+    ).catch((e) => {
+      if (!controller.signal.aborted) updateTab(tab.id, { phase: "error", error: String(e) });
+    }).finally(() => controllers.current.delete(tab.id));
+  };
+
+  const confirmFillinWrite = async (tab: Tab, questionId: string) => {
+    const q = tab.fillinQuestions?.find(x => x.id === questionId);
+    if (!q || !q.targetPath || !q.preview) return;
+    try {
+      const res = await api.vaultWrite(q.targetPath, q.preview);
+      if (res.ok) {
+        updateTab(tab.id, t => ({
+          writeConfirmed: true,
+          fillinQuestions: t.fillinQuestions?.map(xq => xq.id === questionId ? { ...xq, written: true } : xq)
+        }));
+      } else throw new Error("API failed");
+    } catch (err: any) {
+      updateTab(tab.id, { error: err.message });
+    }
+  };
+
+  const runWriteCleanup = (tab: Tab) => {
+    if (!settings) return;
+    controllers.current.get(tab.id)?.abort();
+    const controller = new AbortController();
+    controllers.current.set(tab.id, controller);
+    
+    updateTab(tab.id, { phase: "cleanup", error: undefined, writePreview: "", writeConfirmed: false });
+    const overrideBody = overrideSettingsBody(tab, settings);
+    
+    streamPost(
+      `/api/tabs/${tab.id}/write-cleanup`,
+      { text: tab.writeInput, settings: overrideBody },
+      {
+        phase: (d) => updateTab(tab.id, { phase: d.phase }),
+        text: (d) => updateTab(tab.id, (t) => ({ writePreview: (t.writePreview || "") + d.delta })),
+        done: (d) => updateTab(tab.id, { phase: "done", writePreview: d.text }),
+        error: (d) => updateTab(tab.id, { phase: "error", error: d.message }),
+      },
+      controller.signal
+    ).catch((e) => {
+      if (!controller.signal.aborted) updateTab(tab.id, { phase: "error", error: String(e) });
+    }).finally(() => controllers.current.delete(tab.id));
+  };
+
+  const confirmWrite = async (tab: Tab) => {
+    if (!tab.writePath) return;
+    const content = tab.writePreview || tab.writeInput;
+    if (!content) return;
+    try {
+      const res = await api.vaultWrite(tab.writePath, content);
+      if (res.ok) updateTab(tab.id, { writeConfirmed: true });
+      else throw new Error("API failed");
+    } catch (err: any) {
+      updateTab(tab.id, { error: err.message });
+    }
+  };
+
   const active = tabs.find((t) => t.id === activeId) ?? tabs[0];
   // Right split pane: its chosen tab, falling back to any other tab, else active.
   const right =
@@ -425,7 +648,7 @@ export function App() {
     return <div className="loading">Loading…</div>;
   }
 
-  const engineLabel = settings.engine === "gemini" ? "gemini · agy" : "claude code";
+  const engineLabel = engines.find((e) => e.id === settings.engine)?.label?.toLowerCase() || settings.engine;
   const phase = active?.phase ?? "idle";
   const phaseTone =
     phase === "done" ? "ok" : phase === "error" ? "bad" : phase === "idle" ? "" : "warn";
@@ -453,12 +676,19 @@ export function App() {
       onCleanup={() => runCleanup(paneTab)}
       onNewQuestion={() => addQuestionTab(paneTab)}
       onCancel={() => cancel(paneTab.id)}
+      onSummarize={() => runSummarize(paneTab)}
+      onAutoPlace={() => runAutoPlace(paneTab)}
+      onFillinScan={() => runFillinScan(paneTab)}
+      onFillinWrite={(qid) => runFillinWrite(paneTab, qid)}
+      onConfirmFillinWrite={(qid) => confirmFillinWrite(paneTab, qid)}
+      onWriteCleanup={() => runWriteCleanup(paneTab)}
+      onConfirmWrite={() => confirmWrite(paneTab)}
     />
   );
 
   return (
     <div className="app">
-      {fun && <FunBackground variant={funVariant} />}
+      {design.funEnabled && <FunBackground variant={design.funVariant} />}
       <header className="topbar">
         <div className="brand">
           <span className="app-icon" title="Vault Assistant">
@@ -469,84 +699,168 @@ export function App() {
             <span className="brand-title">Vault Assistant</span>
           </div>
         </div>
-        <div className="topbar-meta">
-          <span className="pill">{engineLabel}</span>
-          {settings.engine === "claude" && (
-            <>
-              <span className="pill">{settings.model.replace("claude-", "")}</span>
-              <span className="pill">{settings.effort} reasoning</span>
-            </>
-          )}
-          {active?.rag && (
-            <span
-              className="pill pill--accent"
-              title="Retrieval-augmented — only relevant vault excerpts are sent"
-            >
-              <span className="dot accent" />
-              RAG
-            </span>
-          )}
-          {fun && (
+        {design.toolbarDropdown ? (
+          <div className="topbar-meta">
+            <div className="toolbar-dropdown-wrap">
+              <button
+                className={`icon-btn ${toolbarDropOpen ? "active" : ""}`}
+                title="Toolbar menu"
+                onClick={() => setToolbarDropOpen((o) => !o)}
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <line x1="4" y1="6" x2="20" y2="6" />
+                  <line x1="4" y1="12" x2="20" y2="12" />
+                  <line x1="4" y1="18" x2="20" y2="18" />
+                </svg>
+              </button>
+              {toolbarDropOpen && (
+                <>
+                  <div className="toolbar-dropdown-backdrop" onClick={() => setToolbarDropOpen(false)} />
+                  <div className="toolbar-dropdown-menu">
+                    <div className="toolbar-dropdown-section">
+                      <span className="toolbar-dropdown-label">Engine</span>
+                      <div className="toolbar-dropdown-pills">
+                        <span className="pill">{engineLabel}</span>
+                        {settings.engine === "claude" && (
+                          <>
+                            <span className="pill">{settings.model.replace("claude-", "")}</span>
+                            <span className="pill">{settings.effort} reasoning</span>
+                          </>
+                        )}
+                        {active?.rag && (
+                          <span
+                            className="pill pill--accent"
+                            title="Retrieval-augmented — only relevant vault excerpts are sent"
+                          >
+                            <span className="dot accent" />
+                            RAG
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="toolbar-dropdown-divider" />
+                    <button
+                      className={`toolbar-dropdown-item ${split ? "active" : ""}`}
+                      onClick={() => { toggleSplit(); setToolbarDropOpen(false); }}
+                    >
+                      <span className="toolbar-dropdown-item-icon">◫</span>
+                      {split ? "Close split view" : "Split view"}
+                    </button>
+                    <button
+                      className="toolbar-dropdown-item"
+                      onClick={() => { setTheme((t) => (t === "dark" ? "light" : "dark")); setToolbarDropOpen(false); }}
+                    >
+                      <span className="toolbar-dropdown-item-icon">{theme === "dark" ? "☾" : "☀"}</span>
+                      {theme === "dark" ? "Light theme" : "Dark theme"}
+                    </button>
+                    <button
+                      className="toolbar-dropdown-item"
+                      onClick={() => { setDensity((d) => (d === "compact" ? "comfortable" : "compact")); setToolbarDropOpen(false); }}
+                    >
+                      <span className="toolbar-dropdown-item-icon">{density === "compact" ? "▣" : "▢"}</span>
+                      {density === "compact" ? "Comfortable density" : "Compact density"}
+                    </button>
+                    <div className="toolbar-dropdown-divider" />
+                    <button
+                      className="toolbar-dropdown-item"
+                      onClick={() => { setQuickOpen(true); setToolbarDropOpen(false); }}
+                    >
+                      <span className="toolbar-dropdown-item-icon">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                          <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+                          <path d="M14 3v5h5M9 13h6M9 17h4" />
+                        </svg>
+                      </span>
+                      Quick Notes
+                    </button>
+                    <button
+                      className="toolbar-dropdown-item"
+                      onClick={() => { setLogsOpen(true); setToolbarDropOpen(false); }}
+                    >
+                      <span className="toolbar-dropdown-item-icon">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                          <path d="M3 3v18h18" />
+                          <path d="M7 14l3-4 3 3 4-6" />
+                        </svg>
+                      </span>
+                      Logs
+                    </button>
+                    <button
+                      className="toolbar-dropdown-item"
+                      onClick={() => { setSettingsOpen(true); setToolbarDropOpen(false); }}
+                    >
+                      <span className="toolbar-dropdown-item-icon">⚙</span>
+                      Settings
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="topbar-meta">
+            <span className="pill">{engineLabel}</span>
+            {settings.engine === "claude" && (
+              <>
+                <span className="pill">{settings.model.replace("claude-", "")}</span>
+                <span className="pill">{settings.effort} reasoning</span>
+              </>
+            )}
+            {active?.rag && (
+              <span
+                className="pill pill--accent"
+                title="Retrieval-augmented — only relevant vault excerpts are sent"
+              >
+                <span className="dot accent" />
+                RAG
+              </span>
+            )}
             <button
-              className="pill pill--accent fun-cycle"
-              title="Cycle background"
-              onClick={() => setFunVariant((v) => nextFunVariant(v))}
+              className={`icon-btn ${split ? "active" : ""}`}
+              title={split ? "Close split view" : "Split view"}
+              onClick={toggleSplit}
             >
-              ✨ {funLabel(funVariant)} ▸
+              ◫
             </button>
-          )}
-          <button
-            className={`icon-btn ${split ? "active" : ""}`}
-            title={split ? "Close split view" : "Split view"}
-            onClick={toggleSplit}
-          >
-            ◫
-          </button>
-          <button
-            className={`icon-btn ${fun ? "active" : ""}`}
-            title={fun ? "Turn off fun mode" : "Fun mode"}
-            onClick={() => setFun((f) => !f)}
-          >
-            ✨
-          </button>
-          <button
-            className="icon-btn"
-            title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-            onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
-          >
-            {theme === "dark" ? "☾" : "☀"}
-          </button>
-          <button
-            className="icon-btn"
-            title={density === "compact" ? "Comfortable density" : "Compact density"}
-            onClick={() => setDensity((d) => (d === "compact" ? "comfortable" : "compact"))}
-          >
-            {density === "compact" ? "▣" : "▢"}
-          </button>
-          <button
-            className={`icon-btn ${quickOpen ? "active" : ""}`}
-            title="Quick notes — reusable links & snippets"
-            onClick={() => setQuickOpen(true)}
-          >
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
-              <path d="M14 3v5h5M9 13h6M9 17h4" />
-            </svg>
-          </button>
-          <button
-            className={`icon-btn ${logsOpen ? "active" : ""}`}
-            title="Logs — recent activity & stats"
-            onClick={() => setLogsOpen(true)}
-          >
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <path d="M3 3v18h18" />
-              <path d="M7 14l3-4 3 3 4-6" />
-            </svg>
-          </button>
-          <button className="icon-btn" title="Settings" onClick={() => setSettingsOpen(true)}>
-            ⚙
-          </button>
-        </div>
+            <button
+              className="icon-btn"
+              title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+              onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+            >
+              {theme === "dark" ? "☾" : "☀"}
+            </button>
+            <button
+              className="icon-btn"
+              title={density === "compact" ? "Comfortable density" : "Compact density"}
+              onClick={() => setDensity((d) => (d === "compact" ? "comfortable" : "compact"))}
+            >
+              {density === "compact" ? "▣" : "▢"}
+            </button>
+            <button
+              className={`icon-btn ${quickOpen ? "active" : ""}`}
+              title="Quick notes — reusable links & snippets"
+              onClick={() => setQuickOpen(true)}
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+                <path d="M14 3v5h5M9 13h6M9 17h4" />
+              </svg>
+            </button>
+            <button
+              className={`icon-btn ${logsOpen ? "active" : ""}`}
+              title="Logs — recent activity & stats"
+              onClick={() => setLogsOpen(true)}
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M3 3v18h18" />
+                <path d="M7 14l3-4 3 3 4-6" />
+              </svg>
+            </button>
+            <button className="icon-btn" title="Settings" onClick={() => setSettingsOpen(true)}>
+              ⚙
+            </button>
+          </div>
+        )}
       </header>
 
       <TabBar
@@ -603,8 +917,10 @@ export function App() {
           engines={engines}
           skills={skills}
           defaultMode={defaultMode}
+          design={design}
           onDefaultModeChange={setDefaultMode}
           onChange={changeSettings}
+          onDesignChange={changeDesign}
           onClose={() => setSettingsOpen(false)}
         />
       )}

@@ -1,12 +1,20 @@
+// A collapsible list of the tools the agent used while producing an answer — file
+// reads, searches, skill runs, RAG retrievals — so the user can see how the answer
+// was grounded. Hidden entirely when there was no activity.
 import { useState } from "react";
 import type { Activity } from "../lib/store";
 
+// Friendly verb/label shown for each tool or CLI engine in the activity list.
 const TOOL_VERB: Record<string, string> = {
   Read: "Reading",
   Grep: "Searching",
   Glob: "Finding",
   Skill: "Running skill",
   agy: "Gemini",
+  gemini: "Gemini",
+  opencode: "OpenCode",
+  cursor: "Cursor Agent",
+  copilot: "GitHub Copilot",
   RAG: "Retrieved",
 };
 

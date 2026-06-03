@@ -1,11 +1,73 @@
 // Client-side types + localStorage persistence for tabs and global settings.
 
 export type Effort = "low" | "medium" | "high";
-export type Engine = "claude" | "gemini";
+export type Engine = "claude" | "gemini" | "opencode" | "cursor" | "copilot";
 
-// A tab is either a general "ask the vault" conversation (default) or the
-// job-application workflow.
-export type TabMode = "ask" | "job";
+// A tab is either a general "ask the vault" conversation (default), the
+// job-application workflow, or a vault writer.
+export type TabMode = "ask" | "job" | "write";
+
+// Vault Writer sub-modes.
+export type WriteMode = "summarize" | "manual" | "fillin";
+
+// A single fill-in question + the user's answer.
+export interface FillinQuestion {
+  id: string;
+  question: string;
+  answer: string;
+  written: boolean;
+  targetPath?: string;
+  preview?: string;
+}
+
+// Design customization types
+export type FontFamily =
+  | "system"
+  | "inter"
+  | "roboto"
+  | "opensans"
+  | "lato"
+  | "montserrat"
+  | "source-sans"
+  | "nunito"
+  | "raleway"
+  | "poppins"
+  | "fira-code"
+  | "jetbrains-mono";
+
+export type BorderRadius = "sharp" | "rounded" | "pill" | "circle";
+export type SpacingScale = "compact" | "comfortable" | "spacious";
+export type ShadowIntensity = "none" | "subtle" | "medium" | "strong";
+
+export type FunVariant = "aurora" | "particles" | "waves" | "dots" | "mesh" | "matrix" | "starfield" | "grid3d" | "flicker" | "comet" | "balatro";
+
+export interface DesignSettings {
+  funEnabled: boolean;
+  funVariant: FunVariant;
+  fontFamily: FontFamily;
+  fontScale: number;
+  accentHue: number;
+  accentChroma: number;
+  borderRadius: BorderRadius;
+  spacingScale: SpacingScale;
+  shadowIntensity: ShadowIntensity;
+  toolbarDropdown: boolean;
+}
+
+export const DEFAULT_DESIGN: DesignSettings = {
+  funEnabled: false,
+  funVariant: "aurora",
+  fontFamily: "system",
+  fontScale: 1,
+  accentHue: 250,
+  accentChroma: 0.13,
+  borderRadius: "rounded",
+  spacingScale: "comfortable",
+  shadowIntensity: "medium",
+  toolbarDropdown: false,
+};
+
+export type UrlFetchMethod = "basic";
 
 export interface Settings {
   engine: Engine;
@@ -18,6 +80,8 @@ export interface Settings {
   persona: string;
   vaultDir: string;
   extraDirs: string[];
+  design: DesignSettings;
+  urlFetchMethod: UrlFetchMethod;
 }
 
 export type Phase = "idle" | "draft" | "humanize" | "cleanup" | "followup" | "done" | "error";
@@ -51,6 +115,14 @@ export interface Tab {
   error?: string;
   overrideEnabled: boolean;
   override?: Settings;
+  // Vault Writer fields
+  writeMode: WriteMode;
+  writePath: string;
+  writeInput: string;
+  writePreview: string;
+  writeConfirmed: boolean;
+  fillinQuestions: FillinQuestion[];
+  fillinDir: string;
 }
 
 // Distinct accent colors that read well on the dark theme.
@@ -146,6 +218,7 @@ export function deriveTitleLocal(jobDescription: string, question: string): stri
 
 const TABS_KEY = "jt.tabs.v1";
 const SETTINGS_KEY = "jt.settings.v1";
+const DESIGN_KEY = "jt.design.v1";
 
 export function uid(): string {
   return crypto.randomUUID();
@@ -168,6 +241,14 @@ export function newTab(existing: Tab[] = [], ragDefault = false, mode: TabMode =
     activity: [],
     phase: "idle",
     overrideEnabled: false,
+    // Vault Writer defaults
+    writeMode: "manual",
+    writePath: "",
+    writeInput: "",
+    writePreview: "",
+    writeConfirmed: false,
+    fillinQuestions: [],
+    fillinDir: "",
   };
 }
 
@@ -184,6 +265,17 @@ export function cloneTabForNewQuestion(source: Tab, existing: Tab[]): Tab {
     overrideEnabled: source.overrideEnabled,
     override: source.override,
   };
+}
+
+// The per-tab settings override to send to the server, or undefined when the tab
+// uses the global settings. The persona (system prompt) is ALWAYS taken from the
+// current global settings: the override UI only edits engine/model/effort/vault,
+// never the system prompt, so a tab — or one cloned via "+ New question" — must
+// follow the currently specified system prompt rather than a persona snapshot that
+// was frozen when Override was first toggled on (and has since gone stale).
+export function overrideSettingsBody(tab: Tab, global: Settings): Settings | undefined {
+  if (!tab.overrideEnabled || !tab.override) return undefined;
+  return { ...tab.override, persona: global.persona };
 }
 
 export function loadTabs(): Tab[] {
@@ -204,6 +296,14 @@ export function loadTabs(): Tab[] {
           t.phase === "draft" || t.phase === "humanize" || t.phase === "cleanup" || t.phase === "followup"
             ? "idle"
             : t.phase,
+        // Backfill Vault Writer fields for tabs saved before this feature.
+        writeMode: t.writeMode ?? "manual",
+        writePath: t.writePath ?? "",
+        writeInput: t.writeInput ?? "",
+        writePreview: t.writePreview ?? "",
+        writeConfirmed: t.writeConfirmed ?? false,
+        fillinQuestions: t.fillinQuestions ?? [],
+        fillinDir: t.fillinDir ?? "",
       }));
     }
   } catch {
@@ -233,7 +333,28 @@ export function saveSettings(s: Settings): void {
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
   } catch {
+    /* ignore quota */
+  }
+}
+
+export function loadDesignSettings(): DesignSettings {
+  try {
+    const raw = localStorage.getItem(DESIGN_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<DesignSettings>;
+      return { ...DEFAULT_DESIGN, ...parsed };
+    }
+  } catch {
     /* ignore */
+  }
+  return DEFAULT_DESIGN;
+}
+
+export function saveDesignSettings(d: DesignSettings): void {
+  try {
+    localStorage.setItem(DESIGN_KEY, JSON.stringify(d));
+  } catch {
+    /* ignore quota */
   }
 }
 

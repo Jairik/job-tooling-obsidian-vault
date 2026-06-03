@@ -1,28 +1,42 @@
+// One tab's main view. Renders the mode switch (Ask / Job / Write) and, for
+// Ask/Job, the input card (job description, question, YC/RAG/Override controls)
+// plus the streamed answer, activity log and follow-up box. In Write mode the
+// inputs are replaced by the VaultWriter. Settings can be overridden per tab.
 import { useState } from "react";
 import type { Settings, Tab } from "../lib/store";
 import type { ModelOption } from "../lib/api";
 import { AnswerStream } from "./AnswerStream";
 import { ActivityLog } from "./ActivityLog";
+import { VaultWriter } from "./VaultWriter";
 
 interface Props {
   tab: Tab;
   globalSettings: Settings;
   models: ModelOption[];
   engines: ModelOption[];
-  skills: { yc: boolean; humanizer: boolean; gemini: boolean };
+  skills: { yc: boolean; humanizer: boolean; gemini: boolean; opencode: boolean; cursor: boolean; copilot: boolean };
   onPatch: (patch: Partial<Tab>) => void;
   onGenerate: () => void;
   onFollowUp: (text: string) => void;
   onCleanup: () => void;
   onNewQuestion: () => void;
   onCancel: () => void;
+  // Vault Writer callbacks
+  onSummarize: () => void;
+  onAutoPlace: () => void;
+  onFillinScan: () => void;
+  onFillinWrite: (questionId: string) => void;
+  onConfirmFillinWrite: (questionId: string) => void;
+  onWriteCleanup: () => void;
+  onConfirmWrite: () => void;
 }
 
-export function TabView({ tab, globalSettings, models, engines, skills, onPatch, onGenerate, onFollowUp, onCleanup, onNewQuestion, onCancel }: Props) {
+export function TabView({ tab, globalSettings, models, engines, skills, onPatch, onGenerate, onFollowUp, onCleanup, onNewQuestion, onCancel, onSummarize, onAutoPlace, onFillinScan, onFillinWrite, onConfirmFillinWrite, onWriteCleanup, onConfirmWrite }: Props) {
   const [followText, setFollowText] = useState("");
   const running =
     tab.phase === "draft" || tab.phase === "humanize" || tab.phase === "cleanup" || tab.phase === "followup";
   const isAsk = tab.mode === "ask";
+  const isWrite = tab.mode === "write";
   const canGenerate = tab.question.trim().length > 0 && !running;
   const hasAnswer = Boolean(tab.answer || tab.draft);
 
@@ -42,9 +56,9 @@ export function TabView({ tab, globalSettings, models, engines, skills, onPatch,
 
   return (
     <div className="tabview">
-      <div className="card inputs">
+      <div className={`card inputs${isWrite ? " inputs-write" : ""}`}>
         <div className="card-h">
-          <h2>{isAsk ? "Ask the vault" : "New answer"}</h2>
+          <h2>{isWrite ? "Write to vault" : isAsk ? "Ask the vault" : "New answer"}</h2>
           <div className="mode-switch" role="group" aria-label="Mode">
             <button
               className={isAsk ? "active" : ""}
@@ -54,14 +68,22 @@ export function TabView({ tab, globalSettings, models, engines, skills, onPatch,
               Ask
             </button>
             <button
-              className={!isAsk ? "active" : ""}
+              className={tab.mode === "job" ? "active" : ""}
               onClick={() => onPatch({ mode: "job" })}
               title="Draft a job-application answer (grounded + humanized)"
             >
               Job
             </button>
+            <button
+              className={isWrite ? "active" : ""}
+              onClick={() => onPatch({ mode: "write" })}
+              title="Write new entries to your vault"
+            >
+              Write
+            </button>
           </div>
         </div>
+        {!isWrite && (
         <div className="card-b">
         {!isAsk && (
           <label className="field">
@@ -140,8 +162,8 @@ export function TabView({ tab, globalSettings, models, engines, skills, onPatch,
                 ))}
               </select>
             </label>
-            {ov.engine === "gemini" && !skills.gemini && (
-              <div className="vault-status bad">agy CLI not found on PATH</div>
+            {ov.engine !== "claude" && !skills[ov.engine as keyof typeof skills] && (
+              <div className="vault-status bad">{ov.engine === "gemini" ? "agy" : ov.engine} CLI not found on PATH</div>
             )}
             {ov.engine === "claude" && (
               <>
@@ -178,61 +200,80 @@ export function TabView({ tab, globalSettings, models, engines, skills, onPatch,
           </div>
         )}
         </div>
+        )}
       </div>
 
-      <AnswerStream
-        phase={tab.phase}
-        mode={tab.mode}
-        draft={tab.draft}
-        answer={tab.answer}
-        notice={tab.notice}
-        error={tab.error}
-        onEditAnswer={(text) => onPatch({ answer: text })}
-        onCleanup={onCleanup}
-        onRegenerate={onGenerate}
-      />
+      {isWrite ? (
+        <VaultWriter
+          tab={tab}
+          globalSettings={globalSettings}
+          onPatch={onPatch}
+          onSummarize={onSummarize}
+          onAutoPlace={onAutoPlace}
+          onFillinScan={onFillinScan}
+          onFillinWrite={onFillinWrite}
+          onConfirmFillinWrite={onConfirmFillinWrite}
+          onWriteCleanup={onWriteCleanup}
+          onConfirmWrite={onConfirmWrite}
+          onCancel={onCancel}
+        />
+      ) : (
+        <>
+          <AnswerStream
+            phase={tab.phase}
+            mode={tab.mode}
+            draft={tab.draft}
+            answer={tab.answer}
+            notice={tab.notice}
+            error={tab.error}
+            onEditAnswer={(text) => onPatch({ answer: text })}
+            onCleanup={onCleanup}
+            onRegenerate={onGenerate}
+          />
 
-      <ActivityLog activity={tab.activity} />
+          <ActivityLog activity={tab.activity} />
 
-      {hasAnswer && (
-        <div className="followup">
-          <div className="followup-actions">
-            <span className="followup-label">Same job, another question?</span>
-            <button
-              className="btn btn-ghost"
-              title="Open a new tab with this job description — a fresh conversation"
-              onClick={onNewQuestion}
-            >
-              + New question
-            </button>
-          </div>
-          {tab.messages.filter((m) => m.role === "user").length > 0 && (
-            <div className="follow-thread">
-              {tab.messages
-                .filter((m) => m.role === "user")
-                .map((m, i) => (
-                  <div key={i} className="follow-bubble">
-                    {m.text}
-                  </div>
-                ))}
+          {hasAnswer && (
+            <div className="followup">
+              <div className="followup-actions">
+                <span className="followup-label">Same job, another question?</span>
+                <button
+                  className="btn btn-ghost"
+                  title="Open a new tab with this job description — a fresh conversation"
+                  onClick={onNewQuestion}
+                >
+                  + New question
+                </button>
+              </div>
+              {tab.messages.filter((m) => m.role === "user").length > 0 && (
+                <div className="follow-thread">
+                  {tab.messages
+                    .filter((m) => m.role === "user")
+                    .map((m, i) => (
+                      <div key={i} className="follow-bubble">
+                        {m.text}
+                      </div>
+                    ))}
+                </div>
+              )}
+              <div className="follow-input">
+                <input
+                  type="text"
+                  placeholder="Follow-up tweak — e.g. “make it shorter, lead with Lunara”…"
+                  value={followText}
+                  disabled={running}
+                  onChange={(e) => setFollowText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") sendFollow();
+                  }}
+                />
+                <button className="btn" disabled={running || !followText.trim()} onClick={sendFollow}>
+                  Send
+                </button>
+              </div>
             </div>
           )}
-          <div className="follow-input">
-            <input
-              type="text"
-              placeholder="Follow-up tweak — e.g. “make it shorter, lead with Lunara”…"
-              value={followText}
-              disabled={running}
-              onChange={(e) => setFollowText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") sendFollow();
-              }}
-            />
-            <button className="btn" disabled={running || !followText.trim()} onClick={sendFollow}>
-              Send
-            </button>
-          </div>
-        </div>
+        </>
       )}
     </div>
   );

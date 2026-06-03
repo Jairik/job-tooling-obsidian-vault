@@ -1,3 +1,6 @@
+// The row of conversation tabs. Each tab shows a status dot (idle / running / done
+// / error), a mode glyph (Ask vs Job), an inline-rename input (double-click the
+// name), and a close button. The active tab is tinted with its own accent color.
 import { useState, type CSSProperties } from "react";
 import type { Tab } from "../lib/store";
 
@@ -10,6 +13,8 @@ interface Props {
   onRename: (id: string, name: string) => void;
 }
 
+// Map a tab's generation phase to its status-dot class. Phases not listed here
+// (e.g. idle) leave the dot tinted with the tab's solid accent color instead.
 const PHASE_DOT: Record<string, string> = {
   draft: "dot-running",
   humanize: "dot-running",
@@ -25,6 +30,8 @@ export function TabBar({ tabs, activeId, onSelect, onAdd, onClose, onRename }: P
     <div className="tabbar">
       {tabs.map((t) => {
         const active = t.id === activeId;
+        // Every tab carries a colored left edge; the active tab gets its accent
+        // tint extended to all borders + a faint background so it stands out.
         const style: CSSProperties = {
           borderLeftWidth: 3,
           borderLeftStyle: "solid",

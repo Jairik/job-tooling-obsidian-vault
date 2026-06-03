@@ -18,16 +18,21 @@ import {
   buildRagAskPrompt,
   buildCleanupPrompt,
   buildCleanupAppend,
-  buildGeminiDraftPrompt,
-  buildGeminiHumanizePrompt,
-  buildGeminiFollowupPrompt,
-  buildGeminiAskPrompt,
-  buildGeminiCleanupPrompt,
+  buildCliDraftPrompt,
+  buildCliHumanizePrompt,
+  buildCliFollowupPrompt,
+  buildCliAskPrompt,
+  buildCliCleanupPrompt,
+  buildSummarizePrompt,
+  buildAutoPlacePrompt,
+  buildFillinScanPrompt,
+  buildFillinAnswerPrompt,
+  buildWriteCleanupPrompt,
   type Settings,
   type TabMode,
 } from "./config";
 import { detectSkills } from "./skills";
-import { geminiAvailable, runAgyTurn, gatherVaultContext } from "./gemini";
+import { cliAvailable, runCliTurn, gatherVaultContext } from "./gemini";
 import { retrieveContext } from "./rag";
 
 const DEFAULT_TOOLS = ["Skill", "Read", "Grep", "Glob"];
@@ -176,15 +181,15 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
   const abort = new AbortController();
   sessions.set(tabId, { ...sessions.get(tabId), abort });
 
-  const isGemini = args.settings.engine === "gemini";
+  const isCliEngine = args.settings.engine !== "claude";
   const isAsk = args.mode === "ask";
   const skills = await detectSkills(args.settings.vaultDir);
   // The yc-combinator skill is Claude-only and job-mode-only.
-  const useYc = !isAsk && !isGemini && args.yc && skills.yc;
+  const useYc = !isAsk && !isCliEngine && args.yc && skills.yc;
   if (!isAsk && args.yc && !useYc) {
     emit("notice", {
-      message: isGemini
-        ? "YC styling uses the Claude-only yc-combinator skill and is skipped on the Gemini engine."
+      message: isCliEngine
+        ? "YC styling uses the Claude-only yc-combinator skill and is skipped on CLI engines."
         : "yc-combinator skill not found — generated without YC styling. Add it at ~/.claude/skills/yc-combinator to enable.",
     });
   }
@@ -209,17 +214,17 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
     const useRag = Boolean(ragContext);
 
     emit("phase", { phase: "draft" });
-    if (isGemini) {
-      if (!geminiAvailable()) {
+    if (isCliEngine) {
+      if (!cliAvailable(args.settings.engine)) {
         emit("error", {
-          message: "The `agy` CLI was not found on PATH. Install Gemini Antigravity CLI, or switch the engine to Claude in Settings.",
+          message: `The \`${args.settings.engine}\` CLI was not found on PATH. Install it, or switch the engine to Claude in Settings.`,
         });
         return;
       }
       let context = ragContext;
       if (!context) context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
-      finalText = await runAgyTurn({
-        prompt: buildGeminiAskPrompt(ASK_PERSONA, context, args.question),
+      finalText = await runCliTurn(args.settings.engine, {
+        prompt: buildCliAskPrompt(ASK_PERSONA, context, args.question),
         phase: "draft",
         emit,
         abort,
@@ -244,21 +249,21 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
     return;
   }
 
-  if (isGemini) {
-    if (!geminiAvailable()) {
+  if (isCliEngine) {
+    if (!cliAvailable(args.settings.engine)) {
       emit("error", {
-        message: "The `agy` CLI was not found on PATH. Install Gemini Antigravity CLI, or switch the engine to Claude in Settings.",
+        message: `The \`${args.settings.engine}\` CLI was not found on PATH. Install it, or switch the engine to Claude in Settings.`,
       });
       return;
     }
-    // Inject vault context ourselves (read-only); agy runs sandboxed. With RAG on
+    // Inject vault context ourselves (read-only); CLI runs sandboxed. With RAG on
     // we send only the retrieved excerpts instead of dumping the whole vault.
     let context = "";
     if (args.rag) context = await retrieveForQuery(args.settings, ragQuery, emit);
     if (!context) context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
     emit("phase", { phase: "draft" });
-    const draft = await runAgyTurn({
-      prompt: buildGeminiDraftPrompt(args.settings.persona, context, args.jobDescription, args.question),
+    const draft = await runCliTurn(args.settings.engine, {
+      prompt: buildCliDraftPrompt(args.settings.persona, context, args.jobDescription, args.question),
       phase: "draft",
       emit,
       abort,
@@ -268,8 +273,8 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
 
     if (args.settings.humanize && draft) {
       emit("phase", { phase: "humanize" });
-      const hum = await runAgyTurn({
-        prompt: buildGeminiHumanizePrompt(draft),
+      const hum = await runCliTurn(args.settings.engine, {
+        prompt: buildCliHumanizePrompt(draft),
         phase: "humanize",
         emit,
         abort,
@@ -352,16 +357,16 @@ export async function followUp(tabId: string, args: FollowUpArgs, emit: Emit): P
   let finalText = "";
   let finalSession = prev?.sessionId;
 
-  if (args.settings.engine === "gemini") {
-    if (!geminiAvailable()) {
-      emit("error", { message: "The `agy` CLI was not found on PATH. Switch the engine to Claude in Settings." });
+  if (args.settings.engine !== "claude") {
+    if (!cliAvailable(args.settings.engine)) {
+      emit("error", { message: `The \`${args.settings.engine}\` CLI was not found on PATH. Switch the engine to Claude in Settings.` });
       return;
     }
     let context = "";
     if (args.rag) context = await retrieveForQuery(args.settings, args.text, emit);
     if (!context) context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
-    finalText = await runAgyTurn({
-      prompt: buildGeminiFollowupPrompt(persona, context, prev?.lastAnswer ?? "", args.text),
+    finalText = await runCliTurn(args.settings.engine, {
+      prompt: buildCliFollowupPrompt(persona, context, prev?.lastAnswer ?? "", args.text),
       phase: "followup",
       emit,
       abort,
@@ -416,13 +421,13 @@ export async function cleanup(tabId: string, args: CleanupArgs, emit: Emit): Pro
   const skills = await detectSkills(args.settings.vaultDir);
   let cleaned = text;
 
-  if (args.settings.engine === "gemini") {
-    if (!geminiAvailable()) {
-      emit("error", { message: "The `agy` CLI was not found on PATH. Switch the engine to Claude in Settings." });
+  if (args.settings.engine !== "claude") {
+    if (!cliAvailable(args.settings.engine)) {
+      emit("error", { message: `The \`${args.settings.engine}\` CLI was not found on PATH. Switch the engine to Claude in Settings.` });
       return;
     }
-    const out = await runAgyTurn({
-      prompt: buildGeminiCleanupPrompt(text),
+    const out = await runCliTurn(args.settings.engine, {
+      prompt: buildCliCleanupPrompt(text),
       phase: "cleanup",
       emit,
       abort,
@@ -453,4 +458,255 @@ export async function cleanup(tabId: string, args: CleanupArgs, emit: Emit): Pro
 
 export function hasSession(tabId: string): boolean {
   return Boolean(sessions.get(tabId)?.sessionId);
+}
+
+// ── Vault Writer pipeline ───────────────────────────────────────────────────
+
+interface SummarizeArgs {
+  input: string;
+  isUrl: boolean;
+  settings: Settings;
+}
+
+export async function summarize(tabId: string, args: SummarizeArgs, emit: Emit): Promise<void> {
+  const abort = new AbortController();
+  sessions.set(tabId, { ...sessions.get(tabId), abort });
+
+  emit("phase", { phase: "draft" });
+
+  let sourceText = args.input.trim();
+  // If input is a URL, the server should have already fetched + extracted the text
+  // and passed it as `input`. We just summarize whatever text we receive.
+
+  const isCliEngine = args.settings.engine !== "claude";
+  let context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
+
+  let finalText = "";
+
+  if (isCliEngine) {
+    if (!cliAvailable(args.settings.engine)) {
+      emit("error", { message: `The \`${args.settings.engine}\` CLI was not found on PATH.` });
+      return;
+    }
+    finalText = await runCliTurn(args.settings.engine, {
+      prompt: buildSummarizePrompt(sourceText, context),
+      phase: "draft",
+      emit,
+      abort,
+    });
+  } else {
+    const r = await runTurn({
+      prompt: buildSummarizePrompt(sourceText, context),
+      settings: args.settings,
+      append: "You are summarizing content for a personal knowledge vault. Produce clean, well-structured markdown.",
+      allowedTools: ["Skill"],
+      phase: "draft",
+      emit,
+      abort,
+    });
+    finalText = r.text;
+  }
+
+  sessions.set(tabId, { ...sessions.get(tabId), abort: undefined });
+  emit("done", { text: finalText });
+}
+
+interface AutoPlaceArgs {
+  content: string;
+  settings: Settings;
+}
+
+export async function autoPlace(tabId: string, args: AutoPlaceArgs, emit: Emit): Promise<void> {
+  const abort = new AbortController();
+  sessions.set(tabId, { ...sessions.get(tabId), abort });
+
+  emit("phase", { phase: "draft" });
+
+  // Build a simple directory listing of the vault for the agent.
+  const { readdirSync, statSync } = await import("fs");
+  const { join, relative } = await import("path");
+  const SKIP = new Set([".git", ".obsidian", "node_modules", ".trash"]);
+
+  function listDirs(dir: string, depth = 0): string[] {
+    if (depth > 4) return [];
+    const lines: string[] = [];
+    try {
+      for (const ent of readdirSync(dir, { withFileTypes: true })) {
+        if (!ent.isDirectory() || SKIP.has(ent.name)) continue;
+        const rel = relative(args.settings.vaultDir, join(dir, ent.name));
+        lines.push("  ".repeat(depth) + rel + "/");
+        lines.push(...listDirs(join(dir, ent.name), depth + 1));
+      }
+    } catch { /* skip unreadable */ }
+    return lines;
+  }
+
+  const structure = listDirs(args.settings.vaultDir).join("\n");
+
+  const isCliEngine = args.settings.engine !== "claude";
+  let finalText = "";
+
+  if (isCliEngine) {
+    if (!cliAvailable(args.settings.engine)) {
+      emit("error", { message: `The \`${args.settings.engine}\` CLI was not found on PATH.` });
+      return;
+    }
+    finalText = await runCliTurn(args.settings.engine, {
+      prompt: buildAutoPlacePrompt(args.content, structure),
+      phase: "draft",
+      emit,
+      abort,
+    });
+  } else {
+    const r = await runTurn({
+      prompt: buildAutoPlacePrompt(args.content, structure),
+      settings: { ...args.settings, effort: "low" },
+      append: "Suggest the best file path in the vault for this content. Respond with ONLY the path.",
+      allowedTools: ["Skill"],
+      phase: "draft",
+      emit,
+      abort,
+    });
+    finalText = r.text;
+  }
+
+  // Clean the response to just the path
+  const suggestedPath = finalText.trim().split("\n")[0].trim().replace(/^["'`]+|["'`]+$/g, "");
+  sessions.set(tabId, { ...sessions.get(tabId), abort: undefined });
+  emit("done", { text: suggestedPath });
+}
+
+interface FillinScanArgs {
+  prompt?: string;
+  dir?: string;
+  settings: Settings;
+}
+
+export async function fillinScan(tabId: string, args: FillinScanArgs, emit: Emit): Promise<void> {
+  const abort = new AbortController();
+  sessions.set(tabId, { ...sessions.get(tabId), abort });
+
+  emit("phase", { phase: "draft" });
+
+  const scanDir = args.dir || args.settings.vaultDir;
+  const context = await gatherVaultContext(scanDir, args.settings.extraDirs ?? []);
+
+  const isCliEngine = args.settings.engine !== "claude";
+  let finalText = "";
+
+  if (isCliEngine) {
+    if (!cliAvailable(args.settings.engine)) {
+      emit("error", { message: `The \`${args.settings.engine}\` CLI was not found on PATH.` });
+      return;
+    }
+    finalText = await runCliTurn(args.settings.engine, {
+      prompt: buildFillinScanPrompt(context, args.prompt),
+      phase: "draft",
+      emit,
+      abort,
+    });
+  } else {
+    const r = await runTurn({
+      prompt: buildFillinScanPrompt(context, args.prompt),
+      settings: args.settings,
+      append: "Analyze the vault and return a JSON array of questions about missing information.",
+      allowedTools: ["Read", "Grep", "Glob"],
+      phase: "draft",
+      emit,
+      abort,
+    });
+    finalText = r.text;
+  }
+
+  sessions.set(tabId, { ...sessions.get(tabId), abort: undefined });
+  emit("done", { text: finalText });
+}
+
+interface FillinWriteArgs {
+  question: string;
+  answer: string;
+  targetPath: string;
+  settings: Settings;
+}
+
+export async function fillinWrite(tabId: string, args: FillinWriteArgs, emit: Emit): Promise<void> {
+  const abort = new AbortController();
+  sessions.set(tabId, { ...sessions.get(tabId), abort });
+
+  emit("phase", { phase: "draft" });
+
+  const context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
+
+  const isCliEngine = args.settings.engine !== "claude";
+  let finalText = "";
+
+  if (isCliEngine) {
+    if (!cliAvailable(args.settings.engine)) {
+      emit("error", { message: `The \`${args.settings.engine}\` CLI was not found on PATH.` });
+      return;
+    }
+    finalText = await runCliTurn(args.settings.engine, {
+      prompt: buildFillinAnswerPrompt(context, args.question, args.answer, args.targetPath),
+      phase: "draft",
+      emit,
+      abort,
+    });
+  } else {
+    const r = await runTurn({
+      prompt: buildFillinAnswerPrompt(context, args.question, args.answer, args.targetPath),
+      settings: args.settings,
+      append: "Format the user\'s answer into clean vault markdown. Output ONLY the formatted content.",
+      allowedTools: ["Skill"],
+      phase: "draft",
+      emit,
+      abort,
+    });
+    finalText = r.text;
+  }
+
+  sessions.set(tabId, { ...sessions.get(tabId), abort: undefined });
+  emit("done", { text: finalText });
+}
+
+interface WriteCleanupArgs {
+  text: string;
+  settings: Settings;
+}
+
+export async function writeCleanup(tabId: string, args: WriteCleanupArgs, emit: Emit): Promise<void> {
+  const abort = new AbortController();
+  sessions.set(tabId, { ...sessions.get(tabId), abort });
+
+  emit("phase", { phase: "cleanup" });
+
+  const isCliEngine = args.settings.engine !== "claude";
+  let finalText = args.text;
+
+  if (isCliEngine) {
+    if (!cliAvailable(args.settings.engine)) {
+      emit("error", { message: `The \`${args.settings.engine}\` CLI was not found on PATH.` });
+      return;
+    }
+    const out = await runCliTurn(args.settings.engine, {
+      prompt: buildWriteCleanupPrompt(args.text),
+      phase: "cleanup",
+      emit,
+      abort,
+    });
+    if (out) finalText = out;
+  } else {
+    const r = await runTurn({
+      prompt: buildWriteCleanupPrompt(args.text),
+      settings: { ...args.settings, model: args.settings.cleanupModel || DEFAULT_CLEANUP_MODEL, effort: "low" },
+      append: "Clean up and format the text into well-structured vault markdown.",
+      allowedTools: ["Skill"],
+      phase: "cleanup",
+      emit,
+      abort,
+    });
+    if (r.text) finalText = r.text;
+  }
+
+  sessions.set(tabId, { ...sessions.get(tabId), abort: undefined });
+  emit("done", { text: finalText });
 }

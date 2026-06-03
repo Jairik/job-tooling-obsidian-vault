@@ -1,3 +1,6 @@
+// Quick Notes drawer: a local-only, copy-on-click scratchpad of reusable profile
+// links, professional references (real people), and labeled note boxes to paste
+// into applications. Persisted to localStorage via the store helpers.
 import { useEffect, useState, type ReactElement } from "react";
 import {
   loadQuickNotes,
