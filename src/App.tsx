@@ -256,6 +256,22 @@ export function App() {
     });
   };
 
+  // Close every tab and reset to a single fresh one. Aborts any in-flight runs
+  // (locally and server-side) first. Confirms when more than one tab is open,
+  // since the open conversations are discarded.
+  const clearAllTabs = () => {
+    if (tabs.length > 1 && !window.confirm(`Close all ${tabs.length} tabs and start fresh?`)) return;
+    for (const t of tabs) {
+      controllers.current.get(t.id)?.abort();
+      api.cancel(t.id).catch(() => {});
+    }
+    controllers.current.clear();
+    const fresh = newTab([], settings?.rag ?? false, defaultMode);
+    setTabs([fresh]);
+    setActiveId(fresh.id);
+    setRightId("");
+  };
+
   const runGenerate = (tab: Tab) => {
     if (!settings) return;
     controllers.current.get(tab.id)?.abort();
@@ -905,6 +921,7 @@ export function App() {
         onSelect={setActiveId}
         onAdd={addTab}
         onClose={closeTab}
+        onClearAll={clearAllTabs}
         onRename={(id, name) => updateTab(id, { name, autoNamed: false })}
       />
 

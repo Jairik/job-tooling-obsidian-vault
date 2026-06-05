@@ -460,6 +460,15 @@ a { color: inherit; text-decoration: none; }
   transition: background 130ms ease, color 130ms ease, border-color 130ms ease;
 }
 .tab-add:hover { color: var(--accent); border-color: color-mix(in oklch, var(--accent) 40%, var(--border)); }
+.tab-clear {
+  display: inline-grid; place-items: center; flex: none;
+  width: 32px; height: 32px; border-radius: 9px;
+  background: color-mix(in oklch, var(--surface) 80%, transparent);
+  border: 1px solid color-mix(in oklch, var(--border) 80%, transparent);
+  color: var(--muted); cursor: pointer;
+  transition: background 130ms ease, color 130ms ease, border-color 130ms ease;
+}
+.tab-clear:hover { color: var(--danger); border-color: color-mix(in oklch, var(--danger) 40%, var(--border)); }
 
 .dot-running { background: var(--accent) !important; animation: pulse 1.1s ease-in-out infinite; }
 .dot-done { background: var(--success) !important; }

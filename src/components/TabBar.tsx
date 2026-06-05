@@ -10,6 +10,7 @@ interface Props {
   onSelect: (id: string) => void;
   onAdd: () => void;
   onClose: (id: string) => void;
+  onClearAll: () => void;
   onRename: (id: string, name: string) => void;
 }
 
@@ -23,7 +24,7 @@ const PHASE_DOT: Record<string, string> = {
   error: "dot-error",
 };
 
-export function TabBar({ tabs, activeId, onSelect, onAdd, onClose, onRename }: Props) {
+export function TabBar({ tabs, activeId, onSelect, onAdd, onClose, onClearAll, onRename }: Props) {
   const [editing, setEditing] = useState<string | null>(null);
 
   return (
@@ -107,6 +108,16 @@ export function TabBar({ tabs, activeId, onSelect, onAdd, onClose, onRename }: P
       <button className="tab-add" title="New tab" onClick={onAdd}>
         +
       </button>
+      {tabs.length > 1 && (
+        <button className="tab-clear" title="Close all tabs" onClick={onClearAll}>
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M3 6h18" />
+            <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+            <path d="M10 11v6M14 11v6" />
+          </svg>
+        </button>
+      )}
     </div>
   );
 }
