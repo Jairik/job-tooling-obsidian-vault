@@ -18,6 +18,7 @@ import {
   loadLogs,
   saveLogs,
   clearLogs,
+  mergeLogs,
   uid,
   LOG_CAP,
   DEFAULT_DESIGN,
@@ -26,6 +27,7 @@ import {
   type TabMode,
   type LogEntry,
   type DesignSettings,
+  type SkillInfo,
 } from "./lib/store";
 import { api, streamPost, type ModelOption } from "./lib/api";
 import { TabBar } from "./components/TabBar";
@@ -60,7 +62,8 @@ export function App() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [engines, setEngines] = useState<ModelOption[]>([]);
-  const [skills, setSkills] = useState({ yc: false, humanizer: false, gemini: false, opencode: false, cursor: false, copilot: false });
+  const [skills, setSkills] = useState({ humanizer: false, gemini: false, opencode: false, cursor: false, copilot: false });
+  const [availableSkills, setAvailableSkills] = useState<SkillInfo[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
@@ -162,21 +165,53 @@ export function App() {
     saveTabs(tabs);
   }, [tabs]);
 
-  // Persist the activity log on change.
+  // Persist the activity log to localStorage on change (instant, offline cache).
   useEffect(() => {
     saveLogs(logs);
   }, [logs]);
 
-  // Append a log entry, keeping only the most recent LOG_CAP entries.
+  // Hydrate from the durable server-side log file once on mount, merging it with
+  // whatever the localStorage cache already holds.
+  useEffect(() => {
+    api
+      .getLogs()
+      .then((serverLogs) => {
+        if (Array.isArray(serverLogs) && serverLogs.length) {
+          setLogs((prev) => mergeLogs(prev, serverLogs));
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Append a log entry: update local state (capped) and persist it to the local
+  // log file on disk (best-effort — a failed write never blocks the UI).
   const addLog = (entry: Omit<LogEntry, "id" | "ts">) => {
-    setLogs((prev) => [...prev, { ...entry, id: uid(), ts: Date.now() }].slice(-LOG_CAP));
+    const full: LogEntry = { ...entry, id: uid(), ts: Date.now() };
+    setLogs((prev) => [...prev, full].slice(-LOG_CAP));
+    api.appendLog(full).catch(() => {});
   };
 
-  // Refresh skill availability whenever the vault changes.
+  // Refresh skill availability + the installed-skill list whenever the vault changes.
   useEffect(() => {
     if (!settings?.vaultDir) return;
     api.skills(settings.vaultDir).then(setSkills).catch(() => {});
+    api.listSkills(settings.vaultDir).then(setAvailableSkills).catch(() => {});
   }, [settings?.vaultDir]);
+
+  // Re-fetch skill status + list (e.g. after creating a new skill).
+  const refreshSkills = () => {
+    const vault = settings?.vaultDir;
+    if (!vault) return;
+    api.skills(vault).then(setSkills).catch(() => {});
+    api.listSkills(vault).then(setAvailableSkills).catch(() => {});
+  };
+
+  // Create a skill from the Settings form, then refresh the list on success.
+  const createSkill = async (payload: { name: string; description: string; body: string; scope: "user" | "vault" }) => {
+    const res = await api.createSkill(payload);
+    if (res.ok) refreshSkills();
+    return res;
+  };
 
   const updateTab = (id: string, patch: Partial<Tab> | ((t: Tab) => Partial<Tab>)) => {
     setTabs((prev) =>
@@ -250,7 +285,7 @@ export function App() {
 
     streamPost(
       `/api/tabs/${tab.id}/generate`,
-      { jobDescription: tab.jobDescription, question: tab.question, yc: tab.yc, rag: tab.rag, mode: tab.mode, settings: overrideBody },
+      { jobDescription: tab.jobDescription, question: tab.question, skills: tab.skills, rag: tab.rag, mode: tab.mode, settings: overrideBody },
       {
         phase: (d) => updateTab(tab.id, { phase: d.phase }),
         text: (d) =>
@@ -316,7 +351,7 @@ export function App() {
 
     streamPost(
       `/api/tabs/${tab.id}/message`,
-      { text, rag: tab.rag, mode: tab.mode, settings: overrideBody },
+      { text, skills: tab.skills, rag: tab.rag, mode: tab.mode, settings: overrideBody },
       {
         phase: (d) => updateTab(tab.id, { phase: d.phase }),
         text: (d) => updateTab(tab.id, (t) => ({ answer: t.answer + d.delta })),
@@ -380,7 +415,7 @@ export function App() {
 
     streamPost(
       `/api/tabs/${tab.id}/cleanup`,
-      { text: sourceText, settings: overrideBody },
+      { text: sourceText, skills: tab.skills, settings: overrideBody },
       {
         phase: (d) => updateTab(tab.id, { phase: d.phase }),
         text: (d) => updateTab(tab.id, (t) => ({ answer: t.answer + d.delta })),
@@ -456,7 +491,7 @@ export function App() {
     
     streamPost(
       `/api/tabs/${tab.id}/summarize`,
-      { input: finalInput, isUrl, settings: overrideBody },
+      { input: finalInput, isUrl, skills: tab.skills, settings: overrideBody },
       {
         phase: (d) => updateTab(tab.id, { phase: d.phase }),
         text: (d) => updateTab(tab.id, (t) => ({ writePreview: (t.writePreview || "") + d.delta })),
@@ -543,7 +578,7 @@ export function App() {
     
     streamPost(
       `/api/tabs/${tab.id}/fillin-write`,
-      { question: q.question, answer: q.answer, targetPath: q.targetPath, settings: overrideBody },
+      { question: q.question, answer: q.answer, targetPath: q.targetPath, skills: tab.skills, settings: overrideBody },
       {
         phase: (d) => updateTab(tab.id, { phase: d.phase }),
         text: (d) => updateTab(tab.id, (t) => ({
@@ -588,7 +623,7 @@ export function App() {
     
     streamPost(
       `/api/tabs/${tab.id}/write-cleanup`,
-      { text: tab.writeInput, settings: overrideBody },
+      { text: tab.writeInput, skills: tab.skills, settings: overrideBody },
       {
         phase: (d) => updateTab(tab.id, { phase: d.phase }),
         text: (d) => updateTab(tab.id, (t) => ({ writePreview: (t.writePreview || "") + d.delta })),
@@ -670,6 +705,7 @@ export function App() {
       models={models}
       engines={engines}
       skills={skills}
+      availableSkills={availableSkills}
       onPatch={(patch) => patchTab(paneTab.id, patch)}
       onGenerate={() => runGenerate(paneTab)}
       onFollowUp={(text) => runFollowUp(paneTab, text)}
@@ -916,11 +952,14 @@ export function App() {
           models={models}
           engines={engines}
           skills={skills}
+          availableSkills={availableSkills}
           defaultMode={defaultMode}
           design={design}
           onDefaultModeChange={setDefaultMode}
           onChange={changeSettings}
           onDesignChange={changeDesign}
+          onCreateSkill={createSkill}
+          onRefreshSkills={refreshSkills}
           onClose={() => setSettingsOpen(false)}
         />
       )}
@@ -932,6 +971,7 @@ export function App() {
           logs={logs}
           onClear={() => {
             clearLogs();
+            api.clearLogs().catch(() => {});
             setLogs([]);
           }}
           onClose={() => setLogsOpen(false)}

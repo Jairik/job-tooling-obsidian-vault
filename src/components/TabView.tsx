@@ -3,18 +3,20 @@
 // plus the streamed answer, activity log and follow-up box. In Write mode the
 // inputs are replaced by the VaultWriter. Settings can be overridden per tab.
 import { useState } from "react";
-import type { Settings, Tab } from "../lib/store";
+import type { Settings, Tab, SkillInfo } from "../lib/store";
 import type { ModelOption } from "../lib/api";
 import { AnswerStream } from "./AnswerStream";
 import { ActivityLog } from "./ActivityLog";
 import { VaultWriter } from "./VaultWriter";
+import { SkillPicker } from "./SkillPicker";
 
 interface Props {
   tab: Tab;
   globalSettings: Settings;
   models: ModelOption[];
   engines: ModelOption[];
-  skills: { yc: boolean; humanizer: boolean; gemini: boolean; opencode: boolean; cursor: boolean; copilot: boolean };
+  skills: { humanizer: boolean; gemini: boolean; opencode: boolean; cursor: boolean; copilot: boolean };
+  availableSkills: SkillInfo[];
   onPatch: (patch: Partial<Tab>) => void;
   onGenerate: () => void;
   onFollowUp: (text: string) => void;
@@ -31,7 +33,7 @@ interface Props {
   onConfirmWrite: () => void;
 }
 
-export function TabView({ tab, globalSettings, models, engines, skills, onPatch, onGenerate, onFollowUp, onCleanup, onNewQuestion, onCancel, onSummarize, onAutoPlace, onFillinScan, onFillinWrite, onConfirmFillinWrite, onWriteCleanup, onConfirmWrite }: Props) {
+export function TabView({ tab, globalSettings, models, engines, skills, availableSkills, onPatch, onGenerate, onFollowUp, onCleanup, onNewQuestion, onCancel, onSummarize, onAutoPlace, onFillinScan, onFillinWrite, onConfirmFillinWrite, onWriteCleanup, onConfirmWrite }: Props) {
   const [followText, setFollowText] = useState("");
   const running =
     tab.phase === "draft" || tab.phase === "humanize" || tab.phase === "cleanup" || tab.phase === "followup";
@@ -114,13 +116,11 @@ export function TabView({ tab, globalSettings, models, engines, skills, onPatch,
         </label>
 
         <div className="controls">
-          {!isAsk && (
-            <label className="chip">
-              <input type="checkbox" checked={tab.yc} onChange={(e) => onPatch({ yc: e.target.checked })} />
-              <span>YC</span>
-              {tab.yc && !skills.yc && <span className="chip-note warn">skill not found</span>}
-            </label>
-          )}
+          <SkillPicker
+            availableSkills={availableSkills}
+            selected={tab.skills}
+            onChange={(s) => onPatch({ skills: s })}
+          />
 
           <label className="chip" title="Retrieve only the most relevant vault excerpts instead of reading the whole vault — fewer tokens.">
             <input type="checkbox" checked={tab.rag} onChange={(e) => onPatch({ rag: e.target.checked })} />
@@ -207,6 +207,7 @@ export function TabView({ tab, globalSettings, models, engines, skills, onPatch,
         <VaultWriter
           tab={tab}
           globalSettings={globalSettings}
+          availableSkills={availableSkills}
           onPatch={onPatch}
           onSummarize={onSummarize}
           onAutoPlace={onAutoPlace}

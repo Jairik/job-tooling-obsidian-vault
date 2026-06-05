@@ -23,7 +23,7 @@ UI and a small JSON + SSE API, and drives the model.
 | Config & prompts | `agent/config.ts` | Defaults, model list, persona, and prompt builders. |
 | Retrieval (RAG) | `agent/rag.ts` | Pure-Bun BM25 retrieval over the vault. See [rag.md](rag.md). |
 | Engines | `agent/gemini.ts` | Optional `agy` (Gemini Antigravity) engine. |
-| Skills | `agent/skills.ts` | Detects the `humanizer` / `yc-combinator` skills. |
+| Skills | `agent/skills.ts` | Discovers installed skills (`~/.claude/skills` + vault `.claude/skills`), creates new ones, and detects `humanizer` for the humanize pass. Selected skills run via the `Skill` tool. |
 | UI | `src/` | React app: tabs, settings, activity log, answer stream. |
 
 ## Docs in this folder

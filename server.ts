@@ -2,8 +2,10 @@
 // JSON + SSE API that drives Claude Code instances per tab.
 import index from "./src/index.html";
 import { generate, followUp, cleanup, cancel, loadSessions, summarize, autoPlace, fillinScan, fillinWrite, writeCleanup } from "./agent/runner";
-import { detectSkills } from "./agent/skills";
+import { detectSkills, listSkills, createSkill } from "./agent/skills";
 import { geminiAvailable, cliAvailable } from "./agent/gemini";
+import { readLogs, appendLog, clearLogs } from "./agent/logs";
+import { fetchClaudeUsage } from "./agent/usage";
 import { loadConfig, saveConfig, defaultSettings, MODELS, ENGINES, DEFAULT_VAULT, type Settings } from "./agent/config";
 import { stat } from "fs/promises";
 import { join } from "path";
@@ -77,6 +79,24 @@ const server = Bun.serve({
       },
     },
 
+    // Durable activity log, persisted to a local (gitignored) file. The UI keeps
+    // its own localStorage copy; GET hydrates from disk, POST appends one entry,
+    // DELETE clears the file.
+    "/api/logs": {
+      GET: async () => Response.json(await readLogs()),
+      POST: async (req) => {
+        await appendLog(await req.json());
+        return Response.json({ ok: true });
+      },
+      DELETE: async () => {
+        await clearLogs();
+        return Response.json({ ok: true });
+      },
+    },
+
+    // Current Claude Code subscription usage (the data the CLI's /usage shows).
+    "/api/usage": async () => Response.json(await fetchClaudeUsage()),
+
     "/api/skills/status": async (req) => {
       const url = new URL(req.url);
       const vault = url.searchParams.get("vault") || (await loadConfig()).vaultDir;
@@ -88,6 +108,29 @@ const server = Bun.serve({
         cursor: cliAvailable("cursor"),
         copilot: cliAvailable("copilot"),
       });
+    },
+
+    // Full list of installed skills (user + vault scope) for the skill picker.
+    "/api/skills/list": async (req) => {
+      const url = new URL(req.url);
+      const vault = url.searchParams.get("vault") || (await loadConfig()).vaultDir;
+      return Response.json(await listSkills(vault));
+    },
+
+    // Scaffold a new skill (SKILL.md) from the Settings "Add skill" form.
+    "/api/skills/create": {
+      POST: async (req) => {
+        const body = await req.json();
+        const vaultDir = (await loadConfig()).vaultDir;
+        const res = await createSkill({
+          name: body.name || "",
+          description: body.description || "",
+          body: body.body || "",
+          scope: body.scope === "vault" ? "vault" : "user",
+          vaultDir,
+        });
+        return Response.json(res, { status: res.ok ? 200 : 400 });
+      },
     },
 
     "/api/vault/validate": async (req) => {
@@ -129,7 +172,7 @@ const server = Bun.serve({
             {
               jobDescription: body.jobDescription || "",
               question: body.question || "",
-              yc: Boolean(body.yc),
+              skills: Array.isArray(body.skills) ? body.skills : [],
               rag: Boolean(body.rag),
               mode: body.mode === "job" ? "job" : "ask",
               settings,
@@ -147,7 +190,7 @@ const server = Bun.serve({
         return sse((emit) =>
           followUp(
             req.params.id,
-            { text: body.text || "", rag: Boolean(body.rag), mode: body.mode === "job" ? "job" : "ask", settings },
+            { text: body.text || "", skills: Array.isArray(body.skills) ? body.skills : [], rag: Boolean(body.rag), mode: body.mode === "job" ? "job" : "ask", settings },
             emit
           )
         );
@@ -158,7 +201,7 @@ const server = Bun.serve({
       POST: async (req) => {
         const body = await req.json();
         const settings = await resolveSettings(body.settings);
-        return sse((emit) => cleanup(req.params.id, { text: body.text || "", settings }, emit));
+        return sse((emit) => cleanup(req.params.id, { text: body.text || "", skills: Array.isArray(body.skills) ? body.skills : [], settings }, emit));
       },
     },
 
@@ -175,7 +218,7 @@ const server = Bun.serve({
       POST: async (req) => {
         const body = await req.json();
         const settings = await resolveSettings(body.settings);
-        return sse((emit) => summarize(req.params.id, { input: body.input, isUrl: body.isUrl ?? false, settings }, emit));
+        return sse((emit) => summarize(req.params.id, { input: body.input, isUrl: body.isUrl ?? false, skills: Array.isArray(body.skills) ? body.skills : [], settings }, emit));
       },
     },
 
@@ -203,6 +246,7 @@ const server = Bun.serve({
           question: body.question,
           answer: body.answer,
           targetPath: body.targetPath,
+          skills: Array.isArray(body.skills) ? body.skills : [],
           settings,
         }, emit));
       },
@@ -212,7 +256,7 @@ const server = Bun.serve({
       POST: async (req) => {
         const body = await req.json();
         const settings = await resolveSettings(body.settings);
-        return sse((emit) => writeCleanup(req.params.id, { text: body.text, settings }, emit));
+        return sse((emit) => writeCleanup(req.params.id, { text: body.text, skills: Array.isArray(body.skills) ? body.skills : [], settings }, emit));
       },
     },
 

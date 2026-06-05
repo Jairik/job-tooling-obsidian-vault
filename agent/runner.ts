@@ -28,10 +28,12 @@ import {
   buildFillinScanPrompt,
   buildFillinAnswerPrompt,
   buildWriteCleanupPrompt,
+  buildSkillsNote,
   type Settings,
   type TabMode,
+  type SkillNote,
 } from "./config";
-import { detectSkills } from "./skills";
+import { detectSkills, listSkills } from "./skills";
 import { cliAvailable, runCliTurn, gatherVaultContext } from "./gemini";
 import { retrieveContext } from "./rag";
 
@@ -168,10 +170,48 @@ async function retrieveForQuery(settings: Settings, query: string, emit: Emit): 
   return r.context;
 }
 
+// Resolve the user's selected skill names into prompt notes (name + description).
+// On CLI engines the Skill tool is unavailable, so any selection is skipped with
+// a notice; names that don't match an installed skill are reported and dropped.
+async function resolveSkillNotes(
+  settings: Settings,
+  names: string[] | undefined,
+  isCliEngine: boolean,
+  emit: Emit
+): Promise<SkillNote[]> {
+  const selected = names ?? [];
+  if (!selected.length) return [];
+  if (isCliEngine) {
+    emit("notice", {
+      message: `Skills use the Claude-only Skill tool and are skipped on the \`${settings.engine}\` CLI engine.`,
+    });
+    return [];
+  }
+  const byName = new Map((await listSkills(settings.vaultDir)).map((s) => [s.name, s]));
+  const notes: SkillNote[] = [];
+  const missing: string[] = [];
+  for (const n of selected) {
+    const info = byName.get(n);
+    if (info) notes.push({ name: info.name, description: info.description });
+    else missing.push(n);
+  }
+  if (missing.length) {
+    emit("notice", { message: `Skill${missing.length === 1 ? "" : "s"} not found and skipped: ${missing.join(", ")}.` });
+  }
+  return notes;
+}
+
+// Ensure the Skill tool is allowed when skills are selected so the agent can
+// invoke them. `undefined` keeps the default tool set (which already has Skill).
+function withSkillTool(tools: string[] | undefined, hasSkills: boolean): string[] | undefined {
+  if (!hasSkills || tools === undefined) return tools;
+  return tools.includes("Skill") ? tools : ["Skill", ...tools];
+}
+
 interface GenerateArgs {
   jobDescription: string;
   question: string;
-  yc: boolean;
+  skills: string[];
   rag: boolean;
   mode: TabMode;
   settings: Settings;
@@ -183,16 +223,8 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
 
   const isCliEngine = args.settings.engine !== "claude";
   const isAsk = args.mode === "ask";
-  const skills = await detectSkills(args.settings.vaultDir);
-  // The yc-combinator skill is Claude-only and job-mode-only.
-  const useYc = !isAsk && !isCliEngine && args.yc && skills.yc;
-  if (!isAsk && args.yc && !useYc) {
-    emit("notice", {
-      message: isCliEngine
-        ? "YC styling uses the Claude-only yc-combinator skill and is skipped on CLI engines."
-        : "yc-combinator skill not found — generated without YC styling. Add it at ~/.claude/skills/yc-combinator to enable.",
-    });
-  }
+  // Selected skills apply to every mode (Claude engine only — CLI has no Skill tool).
+  const skillNotes = await resolveSkillNotes(args.settings, args.skills, isCliEngine, emit);
 
   let finalText = "";
   let finalSession: string | undefined;
@@ -233,8 +265,8 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
       const ans = await runTurn({
         prompt: useRag ? buildRagAskPrompt(ragContext, args.question) : buildAskPrompt(args.question),
         settings: args.settings,
-        append: buildAppend({ persona: ASK_PERSONA, mode: "ask", useRag, phase: "draft" }),
-        allowedTools: useRag ? RAG_TOOLS : undefined,
+        append: buildAppend({ persona: ASK_PERSONA, mode: "ask", skills: skillNotes, useRag, phase: "draft" }),
+        allowedTools: withSkillTool(useRag ? RAG_TOOLS : undefined, skillNotes.length > 0),
         phase: "draft",
         emit,
         abort,
@@ -295,7 +327,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
       }
     }
     const useRag = Boolean(ragContext);
-    const tools = useRag ? RAG_TOOLS : undefined;
+    const tools = withSkillTool(useRag ? RAG_TOOLS : undefined, skillNotes.length > 0);
 
     emit("phase", { phase: "draft" });
     const draft = await runTurn({
@@ -303,7 +335,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
         ? buildRagDraftPrompt(ragContext, args.jobDescription, args.question)
         : buildDraftPrompt(args.jobDescription, args.question),
       settings: args.settings,
-      append: buildAppend({ persona: args.settings.persona, mode: "job", useYc, useRag, phase: "draft" }),
+      append: buildAppend({ persona: args.settings.persona, mode: "job", skills: skillNotes, useRag, phase: "draft" }),
       allowedTools: tools,
       phase: "draft",
       emit,
@@ -320,7 +352,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
           "Apply the humanizer skill to your previous answer. Return ONLY the final humanized version of the answer text — no commentary, no drafts, no audit notes.",
         resume: draft.sessionId,
         settings: args.settings,
-        append: buildAppend({ persona: args.settings.persona, mode: "job", useYc, useRag, phase: "humanize" }),
+        append: buildAppend({ persona: args.settings.persona, mode: "job", skills: skillNotes, useRag, phase: "humanize" }),
         allowedTools: tools,
         phase: "humanize",
         emit,
@@ -338,6 +370,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
 
 interface FollowUpArgs {
   text: string;
+  skills: string[];
   rag: boolean;
   mode: TabMode;
   settings: Settings;
@@ -353,11 +386,13 @@ export async function followUp(tabId: string, args: FollowUpArgs, emit: Emit): P
   // Ask follow-ups keep the general assistant voice; job follow-ups keep the
   // configurable job persona. The resumed session re-receives this each turn.
   const persona = args.mode === "ask" ? ASK_PERSONA : args.settings.persona;
+  const isCliEngine = args.settings.engine !== "claude";
+  const skillNotes = await resolveSkillNotes(args.settings, args.skills, isCliEngine, emit);
 
   let finalText = "";
   let finalSession = prev?.sessionId;
 
-  if (args.settings.engine !== "claude") {
+  if (isCliEngine) {
     if (!cliAvailable(args.settings.engine)) {
       emit("error", { message: `The \`${args.settings.engine}\` CLI was not found on PATH. Switch the engine to Claude in Settings.` });
       return;
@@ -380,8 +415,8 @@ export async function followUp(tabId: string, args: FollowUpArgs, emit: Emit): P
       prompt: useRag ? buildRagFollowupPrompt(ragContext, args.text) : args.text,
       resume: prev?.sessionId,
       settings: args.settings,
-      append: buildAppend({ persona, mode: args.mode, useRag, phase: "followup" }),
-      allowedTools: useRag ? RAG_TOOLS : undefined,
+      append: buildAppend({ persona, mode: args.mode, skills: skillNotes, useRag, phase: "followup" }),
+      allowedTools: withSkillTool(useRag ? RAG_TOOLS : undefined, skillNotes.length > 0),
       phase: "followup",
       emit,
       abort,
@@ -397,6 +432,7 @@ export async function followUp(tabId: string, args: FollowUpArgs, emit: Emit): P
 
 interface CleanupArgs {
   text: string;
+  skills: string[];
   settings: Settings;
 }
 
@@ -418,10 +454,12 @@ export async function cleanup(tabId: string, args: CleanupArgs, emit: Emit): Pro
     return;
   }
 
+  const isCliEngine = args.settings.engine !== "claude";
   const skills = await detectSkills(args.settings.vaultDir);
+  const skillNotes = await resolveSkillNotes(args.settings, args.skills, isCliEngine, emit);
   let cleaned = text;
 
-  if (args.settings.engine !== "claude") {
+  if (isCliEngine) {
     if (!cliAvailable(args.settings.engine)) {
       emit("error", { message: `The \`${args.settings.engine}\` CLI was not found on PATH. Switch the engine to Claude in Settings.` });
       return;
@@ -440,10 +478,12 @@ export async function cleanup(tabId: string, args: CleanupArgs, emit: Emit): Pro
       model: args.settings.cleanupModel || DEFAULT_CLEANUP_MODEL,
       effort: "low",
     };
+    const note = buildSkillsNote(skillNotes);
+    const baseAppend = buildCleanupAppend(skills.humanizer);
     const r = await runTurn({
       prompt: buildCleanupPrompt(text, skills.humanizer),
       settings: cleanupSettings,
-      append: buildCleanupAppend(skills.humanizer),
+      append: note ? `${baseAppend}\n\n${note}` : baseAppend,
       allowedTools: RAG_TOOLS,
       phase: "cleanup",
       emit,
@@ -465,6 +505,7 @@ export function hasSession(tabId: string): boolean {
 interface SummarizeArgs {
   input: string;
   isUrl: boolean;
+  skills: string[];
   settings: Settings;
 }
 
@@ -479,6 +520,7 @@ export async function summarize(tabId: string, args: SummarizeArgs, emit: Emit):
   // and passed it as `input`. We just summarize whatever text we receive.
 
   const isCliEngine = args.settings.engine !== "claude";
+  const skillNotes = await resolveSkillNotes(args.settings, args.skills, isCliEngine, emit);
   let context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
 
   let finalText = "";
@@ -495,10 +537,12 @@ export async function summarize(tabId: string, args: SummarizeArgs, emit: Emit):
       abort,
     });
   } else {
+    const note = buildSkillsNote(skillNotes);
+    const baseAppend = "You are summarizing content for a personal knowledge vault. Produce clean, well-structured markdown.";
     const r = await runTurn({
       prompt: buildSummarizePrompt(sourceText, context),
       settings: args.settings,
-      append: "You are summarizing content for a personal knowledge vault. Produce clean, well-structured markdown.",
+      append: note ? `${baseAppend}\n\n${note}` : baseAppend,
       allowedTools: ["Skill"],
       phase: "draft",
       emit,
@@ -626,6 +670,7 @@ interface FillinWriteArgs {
   question: string;
   answer: string;
   targetPath: string;
+  skills: string[];
   settings: Settings;
 }
 
@@ -638,6 +683,7 @@ export async function fillinWrite(tabId: string, args: FillinWriteArgs, emit: Em
   const context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
 
   const isCliEngine = args.settings.engine !== "claude";
+  const skillNotes = await resolveSkillNotes(args.settings, args.skills, isCliEngine, emit);
   let finalText = "";
 
   if (isCliEngine) {
@@ -652,10 +698,12 @@ export async function fillinWrite(tabId: string, args: FillinWriteArgs, emit: Em
       abort,
     });
   } else {
+    const note = buildSkillsNote(skillNotes);
+    const baseAppend = "Format the user's answer into clean vault markdown. Output ONLY the formatted content.";
     const r = await runTurn({
       prompt: buildFillinAnswerPrompt(context, args.question, args.answer, args.targetPath),
       settings: args.settings,
-      append: "Format the user\'s answer into clean vault markdown. Output ONLY the formatted content.",
+      append: note ? `${baseAppend}\n\n${note}` : baseAppend,
       allowedTools: ["Skill"],
       phase: "draft",
       emit,
@@ -670,6 +718,7 @@ export async function fillinWrite(tabId: string, args: FillinWriteArgs, emit: Em
 
 interface WriteCleanupArgs {
   text: string;
+  skills: string[];
   settings: Settings;
 }
 
@@ -680,6 +729,7 @@ export async function writeCleanup(tabId: string, args: WriteCleanupArgs, emit: 
   emit("phase", { phase: "cleanup" });
 
   const isCliEngine = args.settings.engine !== "claude";
+  const skillNotes = await resolveSkillNotes(args.settings, args.skills, isCliEngine, emit);
   let finalText = args.text;
 
   if (isCliEngine) {
@@ -695,10 +745,12 @@ export async function writeCleanup(tabId: string, args: WriteCleanupArgs, emit: 
     });
     if (out) finalText = out;
   } else {
+    const note = buildSkillsNote(skillNotes);
+    const baseAppend = "Clean up and format the text into well-structured vault markdown.";
     const r = await runTurn({
       prompt: buildWriteCleanupPrompt(args.text),
       settings: { ...args.settings, model: args.settings.cleanupModel || DEFAULT_CLEANUP_MODEL, effort: "low" },
-      append: "Clean up and format the text into well-structured vault markdown.",
+      append: note ? `${baseAppend}\n\n${note}` : baseAppend,
       allowedTools: ["Skill"],
       phase: "cleanup",
       emit,

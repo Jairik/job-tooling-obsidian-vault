@@ -12,13 +12,15 @@ One Bun process does everything:
 - Long generations stream back to the browser as Server-Sent Events (SSE).
 
 There is no separate build step and no database. Global settings live in
-`config.json`; the tab-to-session map lives in `.sessions.json` (both gitignored).
+`config.json`; the tab-to-session map lives in `.sessions.json`; the activity log
+is appended to `logs/activity.jsonl` (all gitignored).
 
 ## A request, end to end
 
 1. **UI** — `src/App.tsx` holds the tabs. Each tab has a job description, a
-   question, and per-tab toggles (**YC**, **RAG**, settings override). Hitting
-   Generate POSTs to `/api/tabs/:id/generate`.
+   question, a per-tab **Skills** selection (which installed skills to apply),
+   and per-tab toggles (**RAG**, settings override). Hitting Generate POSTs to
+   `/api/tabs/:id/generate`.
 2. **Server** — `server.ts` merges the global config with any per-tab override,
    then calls `generate()` and wraps the result in an SSE stream.
 3. **Pipeline** — `agent/runner.ts` runs the turns:
@@ -35,7 +37,8 @@ The engine is chosen globally or per tab.
 
 - **Claude Code** (`@anthropic-ai/claude-agent-sdk`) — the default. Reuses your
   existing Claude Code auth. By default the agent reads the vault itself with
-  `Read`/`Grep`/`Glob`. The `humanizer` and `yc-combinator` skills work here.
+  `Read`/`Grep`/`Glob`, and the `Skill` tool runs any skills selected for the
+  tab. (Skills are unavailable on the CLI engines below, which run sandboxed.)
 - **Gemini Antigravity** (`agent/gemini.ts`) — shells out to the `agy` CLI in a
   sandboxed temp dir. It gets no filesystem access; the app gathers vault context
   and injects it into the prompt. Humanization uses inline rules, and follow-ups
@@ -57,5 +60,7 @@ RAG mode is the token-efficient path. See [rag.md](rag.md) for details.
 - Prompt text and persona — `agent/config.ts`
 - Retrieval — `agent/rag.ts`
 - Session persistence — `agent/runner.ts` (`.sessions.json`)
+- Activity log persistence — `agent/logs.ts` (`logs/activity.jsonl`)
+- Claude Code usage (`/usage` data) — `agent/usage.ts`
 - Client state and localStorage — `src/lib/store.ts`
 - API client (SSE parsing) — `src/lib/api.ts`

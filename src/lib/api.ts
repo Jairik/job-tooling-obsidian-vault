@@ -1,5 +1,21 @@
 // Tiny API client. Streaming endpoints are POST + SSE, so we read the response
 // body manually (EventSource only supports GET).
+import type { SkillInfo, LogEntry } from "./store";
+
+// A single rolling usage window (0–100% of the limit used, plus its reset time).
+export interface UsageWindow {
+  utilization: number;
+  resetsAt: string | null;
+}
+
+export interface UsageResult {
+  ok: boolean;
+  error?: string;
+  fiveHour?: UsageWindow;
+  sevenDay?: UsageWindow;
+  sevenDayOpus?: UsageWindow;
+  extraUsage?: { enabled: boolean; utilization: number | null };
+}
 
 export type SSEHandlers = Record<string, (data: any) => void>;
 
@@ -66,13 +82,39 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     }).then((r) => r.json()),
-  skills: (vault: string): Promise<{ yc: boolean; humanizer: boolean; gemini: boolean; opencode: boolean; cursor: boolean; copilot: boolean }> =>
+  skills: (vault: string): Promise<{ humanizer: boolean; gemini: boolean; opencode: boolean; cursor: boolean; copilot: boolean }> =>
     fetch(`/api/skills/status?vault=${encodeURIComponent(vault)}`).then((r) => r.json()),
+  listSkills: (vault: string): Promise<SkillInfo[]> =>
+    fetch(`/api/skills/list?vault=${encodeURIComponent(vault)}`).then((r) => r.json()),
+  createSkill: (payload: {
+    name: string;
+    description: string;
+    body: string;
+    scope: "user" | "vault";
+  }): Promise<{ ok: boolean; name?: string; scope?: string; path?: string; error?: string }> =>
+    fetch("/api/skills/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then((r) => r.json()),
   validateVault: (
     path: string
   ): Promise<{ valid: boolean; isDir: boolean; foundDirs: string[]; message?: string }> =>
     fetch(`/api/vault/validate?path=${encodeURIComponent(path)}`).then((r) => r.json()),
   cancel: (id: string): Promise<unknown> => fetch(`/api/tabs/${id}/cancel`, { method: "POST" }),
+
+  // Current Claude Code usage (mirrors the CLI's /usage command).
+  usage: (): Promise<UsageResult> => fetch("/api/usage").then((r) => r.json()),
+
+  // Durable activity log persisted server-side to a local file.
+  getLogs: (): Promise<LogEntry[]> => fetch("/api/logs").then((r) => r.json()),
+  appendLog: (entry: LogEntry): Promise<unknown> =>
+    fetch("/api/logs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(entry),
+    }),
+  clearLogs: (): Promise<unknown> => fetch("/api/logs", { method: "DELETE" }),
 
   // Vault Writer APIs
   vaultTree: (vault: string): Promise<any[]> =>

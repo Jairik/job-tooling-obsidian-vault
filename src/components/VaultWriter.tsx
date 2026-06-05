@@ -4,12 +4,14 @@
 //   fillin    — scan the vault for gaps, then draft answers to fill them in
 // Drafting streams a preview into the tab; nothing touches disk until the user
 // explicitly confirms a save (the parent handles the actual vault write).
-import { type Tab, type Settings } from "../lib/store";
+import { type Tab, type Settings, type SkillInfo } from "../lib/store";
 import { VaultPathPicker } from "./VaultPathPicker";
+import { SkillPicker } from "./SkillPicker";
 
 interface Props {
   tab: Tab;
   globalSettings: Settings;
+  availableSkills: SkillInfo[];
   onPatch: (patch: Partial<Tab>) => void;
   onSummarize: () => void;
   onAutoPlace: () => void;
@@ -24,6 +26,7 @@ interface Props {
 export function VaultWriter({
   tab,
   globalSettings,
+  availableSkills,
   onPatch,
   onSummarize,
   onAutoPlace,
@@ -313,6 +316,15 @@ export function VaultWriter({
           </div>
         </div>
         <div className="card-b">
+          <div className="vw-skill-row">
+            <SkillPicker
+              availableSkills={availableSkills}
+              selected={tab.skills}
+              onChange={(s) => onPatch({ skills: s })}
+              title="Skills to apply when drafting vault content (summarize / format / fill-in)"
+            />
+            <span className="vw-skill-hint">Applied when drafting content (not to gap scans or path suggestions).</span>
+          </div>
           {tab.writeMode === "summarize" && renderSummarize()}
           {tab.writeMode === "manual" && renderManual()}
           {tab.writeMode === "fillin" && renderFillin()}

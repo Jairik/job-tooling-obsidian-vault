@@ -10,6 +10,15 @@ export type TabMode = "ask" | "job" | "write";
 // Vault Writer sub-modes.
 export type WriteMode = "summarize" | "manual" | "fillin";
 
+// An installed skill discovered on disk (user or vault scope). Surfaced in the
+// skill picker and the Settings skills list.
+export interface SkillInfo {
+  name: string;
+  description: string;
+  scope: "user" | "vault";
+  path?: string;
+}
+
 // A single fill-in question + the user's answer.
 export interface FillinQuestion {
   id: string;
@@ -104,7 +113,7 @@ export interface Tab {
   mode: TabMode;
   jobDescription: string;
   question: string;
-  yc: boolean;
+  skills: string[]; // names of skills selected to apply to this tab's interactions
   rag: boolean;
   draft: string;
   answer: string;
@@ -233,7 +242,7 @@ export function newTab(existing: Tab[] = [], ragDefault = false, mode: TabMode =
     mode,
     jobDescription: "",
     question: "",
-    yc: false,
+    skills: [],
     rag: ragDefault,
     draft: "",
     answer: "",
@@ -260,7 +269,7 @@ export function cloneTabForNewQuestion(source: Tab, existing: Tab[]): Tab {
   return {
     ...base,
     jobDescription: source.jobDescription,
-    yc: source.yc,
+    skills: source.skills,
     rag: source.rag,
     overrideEnabled: source.overrideEnabled,
     override: source.override,
@@ -288,9 +297,11 @@ export function loadTabs(): Tab[] {
         ...t,
         color: t.color ?? PALETTE[i % PALETTE.length],
         rag: t.rag ?? false,
+        // Migrate the old per-tab `yc` boolean into the general skills selection.
+        skills: t.skills ?? ((t as any).yc ? ["yc-combinator"] : []),
         // Tabs predating the rebrand: keep clearly job-application ones in Job
         // mode, default everything else to the new Ask mode.
-        mode: t.mode ?? (t.jobDescription || t.yc ? "job" : "ask"),
+        mode: t.mode ?? (t.jobDescription || (t as any).yc ? "job" : "ask"),
         autoNamed: t.autoNamed ?? /^Tab \d+$/.test(t.name),
         phase:
           t.phase === "draft" || t.phase === "humanize" || t.phase === "cleanup" || t.phase === "followup"
@@ -491,4 +502,14 @@ export function clearLogs(): void {
   } catch {
     /* ignore */
   }
+}
+
+// Merge two log lists (e.g. the localStorage cache and the durable server copy),
+// de-duplicating by id, ordering oldest→newest, and keeping the most recent cap.
+export function mergeLogs(a: LogEntry[], b: LogEntry[]): LogEntry[] {
+  const byId = new Map<string, LogEntry>();
+  for (const e of [...a, ...b]) {
+    if (e && typeof e.id === "string") byId.set(e.id, e);
+  }
+  return [...byId.values()].sort((x, y) => x.ts - y.ts).slice(-LOG_CAP);
 }

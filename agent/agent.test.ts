@@ -164,7 +164,7 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
     const source: any = {
       ...newTab([], false, "job"),
       jobDescription: "A specific job description",
-      yc: true,
+      skills: ["yc-combinator"],
       overrideEnabled: true,
       override: { ...defaultSettings(), persona: "STALE SYSTEM PROMPT" },
     };
@@ -173,7 +173,7 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
     const clone = cloneTabForNewQuestion(source, []);
     expect(clone.mode).toBe("job");
     expect(clone.jobDescription).toBe("A specific job description");
-    expect(clone.yc).toBe(true);
+    expect(clone.skills).toContain("yc-combinator");
     expect(clone.id).not.toBe(source.id);
 
     // The settings sent for that clone must carry the CURRENT persona, not the

@@ -3,22 +3,28 @@
 // accent, animated backgrounds). Changes are lifted to App via onChange /
 // onDesignChange, which persist them; this component holds no source of truth.
 import { useEffect, useState } from "react";
-import type { Settings, TabMode, DesignSettings, FontFamily, BorderRadius, SpacingScale, ShadowIntensity } from "../lib/store";
+import type { Settings, TabMode, DesignSettings, FontFamily, BorderRadius, SpacingScale, ShadowIntensity, SkillInfo } from "../lib/store";
 import { DEFAULT_DESIGN } from "../lib/store";
 import { api, type ModelOption } from "../lib/api";
 import { FONT_OPTIONS, loadFont } from "../lib/fonts";
 import { FUN_VARIANTS, funLabel, type FunVariant } from "./FunBackground";
+import { UsagePanel } from "./UsagePanel";
+
+type CreateSkillResult = { ok: boolean; error?: string };
 
 interface Props {
   settings: Settings;
   models: ModelOption[];
   engines: ModelOption[];
-  skills: { yc: boolean; humanizer: boolean; gemini: boolean; opencode: boolean; cursor: boolean; copilot: boolean };
+  skills: { humanizer: boolean; gemini: boolean; opencode: boolean; cursor: boolean; copilot: boolean };
+  availableSkills: SkillInfo[];
   defaultMode: TabMode;
   design: DesignSettings;
   onDefaultModeChange: (mode: TabMode) => void;
   onChange: (patch: Partial<Settings>) => void;
   onDesignChange: (patch: Partial<DesignSettings>) => void;
+  onCreateSkill: (payload: { name: string; description: string; body: string; scope: "user" | "vault" }) => Promise<CreateSkillResult>;
+  onRefreshSkills: () => void;
   onClose: () => void;
 }
 
@@ -45,15 +51,45 @@ export function SettingsPanel({
   models,
   engines,
   skills,
+  availableSkills,
   defaultMode,
   design,
   onDefaultModeChange,
   onChange,
   onDesignChange,
+  onCreateSkill,
+  onRefreshSkills,
   onClose,
 }: Props) {
   const [vaultInput, setVaultInput] = useState(settings.vaultDir);
   const [vault, setVault] = useState<VaultState | null>(null);
+
+  // "Add skill" form state.
+  const [skillFormOpen, setSkillFormOpen] = useState(false);
+  const [skillName, setSkillName] = useState("");
+  const [skillDesc, setSkillDesc] = useState("");
+  const [skillBody, setSkillBody] = useState("");
+  const [skillScope, setSkillScope] = useState<"user" | "vault">("user");
+  const [skillBusy, setSkillBusy] = useState(false);
+  const [skillError, setSkillError] = useState("");
+  const [skillOk, setSkillOk] = useState("");
+
+  const submitSkill = async () => {
+    setSkillBusy(true);
+    setSkillError("");
+    setSkillOk("");
+    const res = await onCreateSkill({ name: skillName, description: skillDesc, body: skillBody, scope: skillScope });
+    setSkillBusy(false);
+    if (res.ok) {
+      setSkillOk(`Created "${skillName.trim().toLowerCase()}".`);
+      setSkillName("");
+      setSkillDesc("");
+      setSkillBody("");
+      setSkillFormOpen(false);
+    } else {
+      setSkillError(res.error || "Failed to create skill.");
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -190,6 +226,14 @@ export function SettingsPanel({
                 </select>
                 <div className="notice small">Lightweight model used by the answer card's "Clean up" button (grammar fix + humanize).</div>
               </label>
+
+              <div className="field" style={{ marginTop: "var(--space-2)" }}>
+                <span>Usage</span>
+                <UsagePanel />
+                <div className="notice small">
+                  Live Claude Code subscription usage — the same limits the CLI's <code>/usage</code> command reports.
+                </div>
+              </div>
             </>
           )}
         </div>
@@ -261,15 +305,6 @@ export function SettingsPanel({
                     }
                   />
                 )}
-                <StatusTip
-                  ok={skills.yc}
-                  label="yc"
-                  tip={
-                    skills.yc
-                      ? "yc-combinator skill found"
-                      : "yc-combinator skill not found in ~/.claude/skills or the vault"
-                  }
-                />
               </span>
             </span>
             <input
@@ -307,6 +342,101 @@ export function SettingsPanel({
               onChange={(e) => onChange({ persona: e.target.value })}
             />
           </label>
+        </div>
+
+        {/* Skills */}
+        <div className="settings-section">
+          <div className="settings-section-title">Skills</div>
+          <p className="notice small">
+            Skills are <code>SKILL.md</code> folders in <code>~/.claude/skills</code> (user) or the vault's
+            <code> .claude/skills</code> (vault). Pick which to apply per interaction from the Skills button on each tab.
+          </p>
+
+          <div className="skills-list">
+            {availableSkills.length === 0 ? (
+              <div className="notice small">No skills installed yet.</div>
+            ) : (
+              availableSkills.map((s) => (
+                <div key={`${s.scope}:${s.name}`} className="skills-list-item">
+                  <div className="skills-list-head">
+                    <span className="skills-list-name">{s.name}</span>
+                    <span className={`skill-scope-badge ${s.scope}`}>{s.scope}</span>
+                  </div>
+                  {s.description && <div className="skills-list-desc">{s.description}</div>}
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="skills-actions">
+            <button className="btn btn-ghost" onClick={onRefreshSkills}>
+              Refresh
+            </button>
+            <button
+              className="btn"
+              onClick={() => {
+                setSkillFormOpen((o) => !o);
+                setSkillError("");
+                setSkillOk("");
+              }}
+            >
+              {skillFormOpen ? "Cancel" : "Add skill"}
+            </button>
+          </div>
+
+          {skillOk && <div className="vault-status ok">{skillOk}</div>}
+
+          {skillFormOpen && (
+            <div className="skill-form">
+              <label className="field">
+                <span>Name (kebab-case)</span>
+                <input
+                  type="text"
+                  value={skillName}
+                  spellCheck={false}
+                  placeholder="e.g. tone-check"
+                  onChange={(e) => setSkillName(e.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Description</span>
+                <input
+                  type="text"
+                  value={skillDesc}
+                  placeholder="When should the agent use this skill?"
+                  onChange={(e) => setSkillDesc(e.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Instructions</span>
+                <textarea
+                  rows={6}
+                  className="mono"
+                  spellCheck={false}
+                  value={skillBody}
+                  placeholder="Markdown instructions for the skill…"
+                  onChange={(e) => setSkillBody(e.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Scope</span>
+                <select value={skillScope} onChange={(e) => setSkillScope(e.target.value as "user" | "vault")}>
+                  <option value="user">User (~/.claude/skills)</option>
+                  <option value="vault">Vault (.claude/skills)</option>
+                </select>
+              </label>
+              {skillError && <div className="vault-status bad">{skillError}</div>}
+              <div className="skills-actions">
+                <button
+                  className="btn btn-primary"
+                  disabled={skillBusy || !skillName.trim() || !skillDesc.trim()}
+                  onClick={submitSkill}
+                >
+                  {skillBusy ? "Creating…" : "Create skill"}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Background Section */}

@@ -94,18 +94,34 @@ export function defaultSettings(vaultDir = DEFAULT_VAULT): Settings {
   };
 }
 
+// A skill the user has chosen to apply to this interaction. Only the name and a
+// short description are needed for the prompt note; the agent invokes it by name
+// through the Skill tool.
+export interface SkillNote {
+  name: string;
+  description: string;
+}
+
+// Render the SKILLS section of the system-prompt append from the user's selected
+// skills. Returns "" when nothing is selected.
+export function buildSkillsNote(skills: SkillNote[] | undefined): string {
+  if (!skills?.length) return "";
+  const lines = skills.map((s) => `  - ${s.name}: ${s.description || "(no description)"}`);
+  return `SKILLS\n- Apply the following skills with the Skill tool wherever they are relevant to this task. Invoke each by name:\n${lines.join("\n")}`;
+}
+
 interface BuildArgs {
   persona: string;
   mode: TabMode;
-  useYc?: boolean;
+  skills?: SkillNote[];
   useRag?: boolean;
   phase: "draft" | "humanize" | "followup";
 }
 
 // Compose the system-prompt append from the base persona plus phase/mode notes.
-// Ask mode is a single grounded answer turn: it skips the YC and humanize notes
-// (those belong to the job-application pipeline).
-export function buildAppend({ persona, mode, useYc, useRag, phase }: BuildArgs): string {
+// Ask mode is a single grounded answer turn: it skips the humanize note (that
+// belongs to the job-application pipeline). Selected skills apply to every mode.
+export function buildAppend({ persona, mode, skills, useRag, phase }: BuildArgs): string {
   const isAsk = mode === "ask";
   const parts = [persona.trim()];
 
@@ -115,11 +131,8 @@ export function buildAppend({ persona, mode, useYc, useRag, phase }: BuildArgs):
     );
   }
 
-  if (!isAsk && useYc) {
-    parts.push(
-      `Y COMBINATOR\n- This answer is for a Y Combinator application. Use the yc-combinator skill to shape the structure and tone: direct, concrete, founder-style, no fluff.`
-    );
-  }
+  const skillsNote = buildSkillsNote(skills);
+  if (skillsNote) parts.push(skillsNote);
 
   if (!isAsk && phase === "humanize") {
     parts.push(
