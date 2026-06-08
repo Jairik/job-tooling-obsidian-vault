@@ -8,6 +8,8 @@ import {
   loadTabs,
   saveTabs,
   loadSettings,
+  mergeSettings,
+  normalizeSettings,
   saveSettings,
   loadDesignSettings,
   saveDesignSettings,
@@ -22,6 +24,8 @@ import {
   uid,
   LOG_CAP,
   DEFAULT_DESIGN,
+  effectiveEngineModel,
+  effectiveEngineReasoning,
   type Settings,
   type Tab,
   type TabMode,
@@ -62,7 +66,7 @@ export function App() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [engines, setEngines] = useState<ModelOption[]>([]);
-  const [skills, setSkills] = useState({ humanizer: false, gemini: false, opencode: false, cursor: false, copilot: false });
+  const [skills, setSkills] = useState({ humanizer: false, gemini: false, opencode: false, cursor: false, copilot: false, codex: false });
   const [availableSkills, setAvailableSkills] = useState<SkillInfo[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
@@ -155,7 +159,8 @@ export function App() {
       setModels(meta.models);
       setEngines(meta.engines);
       const local = loadSettings();
-      const merged: Settings = { ...config, ...(local ?? {}) };
+      const base = normalizeSettings(config);
+      const merged: Settings = local ? mergeSettings(base, local) : base;
       setSettings(merged);
     })();
   }, []);
@@ -221,7 +226,7 @@ export function App() {
 
   const changeSettings = (patch: Partial<Settings>) => {
     setSettings((prev) => {
-      const next = { ...(prev as Settings), ...patch };
+      const next = mergeSettings(prev as Settings, patch);
       saveSettings(next);
       api.saveConfig(patch).catch(() => {});
       return next;
@@ -295,9 +300,10 @@ export function App() {
 
     const overrideBody = overrideSettingsBody(tab, settings);
     const eff = tab.overrideEnabled ? tab.override ?? settings : settings;
+    const effModel = effectiveEngineModel(eff);
     const meta = { tabId: tab.id, tabName: tab.name, tabColor: tab.color };
     const startedAt = Date.now();
-    addLog({ ...meta, kind: "generate", engine: eff.engine, model: eff.model, question: tab.question });
+    addLog({ ...meta, kind: "generate", engine: eff.engine, model: effModel, question: tab.question });
 
     streamPost(
       `/api/tabs/${tab.id}/generate`,
@@ -320,7 +326,7 @@ export function App() {
             ...meta,
             kind: "answer",
             engine: eff.engine,
-            model: eff.model,
+            model: effModel,
             question: tab.question,
             durationMs: Date.now() - startedAt,
             chars: d.text.length,
@@ -361,9 +367,10 @@ export function App() {
     }));
     const overrideBody = overrideSettingsBody(tab, settings);
     const eff = tab.overrideEnabled ? tab.override ?? settings : settings;
+    const effModel = effectiveEngineModel(eff);
     const meta = { tabId: tab.id, tabName: tab.name, tabColor: tab.color };
     const startedAt = Date.now();
-    addLog({ ...meta, kind: "followup", engine: eff.engine, model: eff.model, question: text });
+    addLog({ ...meta, kind: "followup", engine: eff.engine, model: effModel, question: text });
 
     streamPost(
       `/api/tabs/${tab.id}/message`,
@@ -385,7 +392,7 @@ export function App() {
             ...meta,
             kind: "answer",
             engine: eff.engine,
-            model: eff.model,
+            model: effModel,
             question: text,
             durationMs: Date.now() - startedAt,
             chars: d.text.length,
@@ -425,9 +432,10 @@ export function App() {
 
     const overrideBody = overrideSettingsBody(tab, settings);
     const eff = tab.overrideEnabled ? tab.override ?? settings : settings;
+    const cleanupModel = eff.engine === "claude" ? eff.cleanupModel : effectiveEngineModel(eff);
     const meta = { tabId: tab.id, tabName: tab.name, tabColor: tab.color };
     const startedAt = Date.now();
-    addLog({ ...meta, kind: "cleanup", engine: eff.engine, model: eff.cleanupModel });
+    addLog({ ...meta, kind: "cleanup", engine: eff.engine, model: cleanupModel });
 
     streamPost(
       `/api/tabs/${tab.id}/cleanup`,
@@ -446,7 +454,7 @@ export function App() {
             ...meta,
             kind: "answer",
             engine: eff.engine,
-            model: eff.cleanupModel,
+            model: cleanupModel,
             durationMs: Date.now() - startedAt,
             chars: (d.text || "").length,
             detail: (d.text || "").slice(0, 280),
@@ -700,6 +708,8 @@ export function App() {
   }
 
   const engineLabel = engines.find((e) => e.id === settings.engine)?.label?.toLowerCase() || settings.engine;
+  const currentModel = effectiveEngineModel(settings);
+  const currentReasoning = effectiveEngineReasoning(settings);
   const phase = active?.phase ?? "idle";
   const phaseTone =
     phase === "done" ? "ok" : phase === "error" ? "bad" : phase === "idle" ? "" : "warn";
@@ -773,11 +783,11 @@ export function App() {
                       <span className="toolbar-dropdown-label">Engine</span>
                       <div className="toolbar-dropdown-pills">
                         <span className="pill">{engineLabel}</span>
-                        {settings.engine === "claude" && (
-                          <>
-                            <span className="pill">{settings.model.replace("claude-", "")}</span>
-                            <span className="pill">{settings.effort} reasoning</span>
-                          </>
+                        {currentModel && (
+                          <span className="pill">{currentModel.replace("claude-", "")}</span>
+                        )}
+                        {currentReasoning && (
+                          <span className="pill">{currentReasoning} reasoning</span>
                         )}
                         {active?.rag && (
                           <span
@@ -852,11 +862,11 @@ export function App() {
         ) : (
           <div className="topbar-meta">
             <span className="pill">{engineLabel}</span>
-            {settings.engine === "claude" && (
-              <>
-                <span className="pill">{settings.model.replace("claude-", "")}</span>
-                <span className="pill">{settings.effort} reasoning</span>
-              </>
+            {currentModel && (
+              <span className="pill">{currentModel.replace("claude-", "")}</span>
+            )}
+            {currentReasoning && (
+              <span className="pill">{currentReasoning} reasoning</span>
             )}
             {active?.rag && (
               <span

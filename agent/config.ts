@@ -17,7 +17,9 @@ export const MODELS = [
 
 export type Effort = "low" | "medium" | "high";
 
-export type Engine = "claude" | "gemini" | "opencode" | "cursor" | "copilot";
+export type Engine = "claude" | "gemini" | "opencode" | "cursor" | "copilot" | "codex";
+export type EngineModels = Partial<Record<Engine, string>>;
+export type EngineReasoning = Partial<Record<Engine, string>>;
 
 // A tab is either a general "ask the vault" conversation (default), the
 // job-application workflow, or a vault writer.
@@ -29,6 +31,7 @@ export const ENGINES = [
   { id: "opencode", label: "OpenCode" },
   { id: "cursor", label: "Cursor Agent" },
   { id: "copilot", label: "GitHub Copilot" },
+  { id: "codex", label: "Codex" },
 ];
 
 // "medium reasoning" maps to a medium thinking budget.
@@ -43,6 +46,8 @@ export interface Settings {
   model: string;
   cleanupModel: string;
   effort: Effort;
+  engineModels: EngineModels;
+  engineReasoning: EngineReasoning;
   humanize: boolean;
   rag: boolean;
   maxTurns: number;
@@ -50,6 +55,28 @@ export interface Settings {
   vaultDir: string;
   extraDirs: string[];
   urlFetchMethod?: string;
+}
+
+export function defaultEngineModels(): Record<Engine, string> {
+  return {
+    claude: DEFAULT_MODEL,
+    gemini: "",
+    opencode: "",
+    cursor: "",
+    copilot: "",
+    codex: "",
+  };
+}
+
+export function defaultEngineReasoning(): Record<Engine, string> {
+  return {
+    claude: "medium",
+    gemini: "",
+    opencode: "",
+    cursor: "",
+    copilot: "",
+    codex: "",
+  };
 }
 
 export const DEFAULT_PERSONA = `You are writing a job-application answer on behalf of JJ McCauley, a software engineer. You are not a generic assistant: you produce the exact answer text JJ would submit, written in the first person ("I").
@@ -85,6 +112,8 @@ export function defaultSettings(vaultDir = DEFAULT_VAULT): Settings {
     model: DEFAULT_MODEL,
     cleanupModel: DEFAULT_CLEANUP_MODEL,
     effort: "medium",
+    engineModels: defaultEngineModels(),
+    engineReasoning: defaultEngineReasoning(),
     humanize: true,
     rag: false,
     maxTurns: 24,
@@ -92,6 +121,73 @@ export function defaultSettings(vaultDir = DEFAULT_VAULT): Settings {
     vaultDir,
     extraDirs: [],
   };
+}
+
+function asEffort(value: unknown): Effort | undefined {
+  return value === "low" || value === "medium" || value === "high" ? value : undefined;
+}
+
+export function normalizeSettings(saved: Partial<Settings> = {}, vaultDir = DEFAULT_VAULT): Settings {
+  const base = defaultSettings(vaultDir);
+  const raw = saved as Partial<Settings> & {
+    engineModels?: EngineModels;
+    engineReasoning?: EngineReasoning;
+  };
+  const engineModels = { ...base.engineModels, ...(raw.engineModels ?? {}) };
+  const engineReasoning = { ...base.engineReasoning, ...(raw.engineReasoning ?? {}) };
+
+  if (typeof raw.model === "string" && raw.model.trim()) engineModels.claude = raw.model;
+  if (typeof raw.effort === "string" && raw.effort.trim()) engineReasoning.claude = raw.effort;
+
+  const claudeEffort = asEffort(engineReasoning.claude) ?? asEffort(raw.effort) ?? base.effort;
+
+  return {
+    ...base,
+    ...saved,
+    engineModels,
+    engineReasoning,
+    model: engineModels.claude || raw.model || DEFAULT_MODEL,
+    effort: claudeEffort,
+    vaultDir: raw.vaultDir || vaultDir,
+    extraDirs: Array.isArray(raw.extraDirs) ? raw.extraDirs : [],
+  };
+}
+
+export function mergeSettings(base: Settings, patch: Partial<Settings> | undefined): Settings {
+  if (!patch) return normalizeSettings(base, base.vaultDir || DEFAULT_VAULT);
+  return normalizeSettings(
+    {
+      ...base,
+      ...patch,
+      engineModels: { ...(base.engineModels ?? {}), ...(patch.engineModels ?? {}) },
+      engineReasoning: { ...(base.engineReasoning ?? {}), ...(patch.engineReasoning ?? {}) },
+    },
+    patch.vaultDir || base.vaultDir || DEFAULT_VAULT
+  );
+}
+
+export function effectiveEngineModel(settings: Settings, engine: Engine = settings.engine): string {
+  const configured = settings.engineModels?.[engine]?.trim();
+  if (configured) return configured;
+  return engine === "claude" ? settings.model || DEFAULT_MODEL : "";
+}
+
+export function effectiveEngineReasoning(settings: Settings, engine: Engine = settings.engine): string {
+  const configured = settings.engineReasoning?.[engine]?.trim();
+  if (configured) return configured;
+  return engine === "claude" ? settings.effort || "medium" : "";
+}
+
+export function claudeReasoningTokens(settings: Settings): number {
+  const raw = effectiveEngineReasoning(settings, "claude").toLowerCase();
+  if (/^\d+$/.test(raw)) return Math.max(1_000, Math.min(64_000, Number(raw)));
+  const effort =
+    raw === "none" || raw === "minimal"
+      ? "low"
+      : raw === "xhigh" || raw === "max"
+        ? "high"
+        : asEffort(raw);
+  return REASONING[effort ?? settings.effort] ?? REASONING.medium;
 }
 
 // A skill the user has chosen to apply to this interaction. Only the name and a
@@ -366,14 +462,14 @@ const CONFIG_PATH = join(import.meta.dir, "..", "config.json");
 export async function loadConfig(): Promise<Settings> {
   try {
     const saved = JSON.parse(await Bun.file(CONFIG_PATH).text());
-    return { ...defaultSettings(), ...saved };
+    return normalizeSettings(saved);
   } catch {
     return defaultSettings();
   }
 }
 
 export async function saveConfig(patch: Partial<Settings>): Promise<Settings> {
-  const next = { ...(await loadConfig()), ...patch };
+  const next = mergeSettings(await loadConfig(), patch);
   await Bun.write(CONFIG_PATH, JSON.stringify(next, null, 2));
   return next;
 }

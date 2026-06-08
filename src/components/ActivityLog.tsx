@@ -15,6 +15,7 @@ const TOOL_VERB: Record<string, string> = {
   opencode: "OpenCode",
   cursor: "Cursor Agent",
   copilot: "GitHub Copilot",
+  codex: "Codex",
   RAG: "Retrieved",
 };
 

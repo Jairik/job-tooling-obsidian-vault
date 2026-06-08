@@ -1,7 +1,9 @@
 // Client-side types + localStorage persistence for tabs and global settings.
 
 export type Effort = "low" | "medium" | "high";
-export type Engine = "claude" | "gemini" | "opencode" | "cursor" | "copilot";
+export type Engine = "claude" | "gemini" | "opencode" | "cursor" | "copilot" | "codex";
+export type EngineModels = Partial<Record<Engine, string>>;
+export type EngineReasoning = Partial<Record<Engine, string>>;
 
 // A tab is either a general "ask the vault" conversation (default), the
 // job-application workflow, or a vault writer.
@@ -83,6 +85,8 @@ export interface Settings {
   model: string;
   cleanupModel: string;
   effort: Effort;
+  engineModels: EngineModels;
+  engineReasoning: EngineReasoning;
   humanize: boolean;
   rag: boolean;
   maxTurns: number;
@@ -91,6 +95,81 @@ export interface Settings {
   extraDirs: string[];
   design: DesignSettings;
   urlFetchMethod: UrlFetchMethod;
+}
+
+export const DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6";
+
+export function defaultEngineModels(): Record<Engine, string> {
+  return {
+    claude: DEFAULT_CLAUDE_MODEL,
+    gemini: "",
+    opencode: "",
+    cursor: "",
+    copilot: "",
+    codex: "",
+  };
+}
+
+export function defaultEngineReasoning(): Record<Engine, string> {
+  return {
+    claude: "medium",
+    gemini: "",
+    opencode: "",
+    cursor: "",
+    copilot: "",
+    codex: "",
+  };
+}
+
+function asEffort(value: unknown): Effort | undefined {
+  return value === "low" || value === "medium" || value === "high" ? value : undefined;
+}
+
+export function normalizeSettings(raw: Partial<Settings>): Settings {
+  const engineModels = { ...defaultEngineModels(), ...(raw.engineModels ?? {}) };
+  const engineReasoning = { ...defaultEngineReasoning(), ...(raw.engineReasoning ?? {}) };
+  if (typeof raw.model === "string" && raw.model.trim()) engineModels.claude = raw.model;
+  if (typeof raw.effort === "string" && raw.effort.trim()) engineReasoning.claude = raw.effort;
+
+  const claudeEffort = asEffort(engineReasoning.claude) ?? asEffort(raw.effort) ?? "medium";
+
+  return {
+    engine: raw.engine ?? "claude",
+    model: engineModels.claude || raw.model || DEFAULT_CLAUDE_MODEL,
+    cleanupModel: raw.cleanupModel ?? "claude-haiku-4-5",
+    effort: claudeEffort,
+    engineModels,
+    engineReasoning,
+    humanize: raw.humanize ?? true,
+    rag: raw.rag ?? false,
+    maxTurns: raw.maxTurns ?? 24,
+    persona: raw.persona ?? "",
+    vaultDir: raw.vaultDir ?? "",
+    extraDirs: Array.isArray(raw.extraDirs) ? raw.extraDirs : [],
+    design: raw.design ?? DEFAULT_DESIGN,
+    urlFetchMethod: raw.urlFetchMethod ?? "basic",
+  };
+}
+
+export function mergeSettings(base: Settings, patch: Partial<Settings>): Settings {
+  return normalizeSettings({
+    ...base,
+    ...patch,
+    engineModels: { ...(base.engineModels ?? {}), ...(patch.engineModels ?? {}) },
+    engineReasoning: { ...(base.engineReasoning ?? {}), ...(patch.engineReasoning ?? {}) },
+  });
+}
+
+export function effectiveEngineModel(settings: Settings, engine: Engine = settings.engine): string {
+  const configured = settings.engineModels?.[engine]?.trim();
+  if (configured) return configured;
+  return engine === "claude" ? settings.model || DEFAULT_CLAUDE_MODEL : "";
+}
+
+export function effectiveEngineReasoning(settings: Settings, engine: Engine = settings.engine): string {
+  const configured = settings.engineReasoning?.[engine]?.trim();
+  if (configured) return configured;
+  return engine === "claude" ? settings.effort || "medium" : "";
 }
 
 export type Phase = "idle" | "draft" | "humanize" | "cleanup" | "followup" | "done" | "error";
@@ -334,7 +413,7 @@ export function saveTabs(tabs: Tab[]): void {
 export function loadSettings(): Settings | null {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    return raw ? (JSON.parse(raw) as Settings) : null;
+    return raw ? normalizeSettings(JSON.parse(raw) as Partial<Settings>) : null;
   } catch {
     return null;
   }

@@ -4,7 +4,7 @@
 // onDesignChange, which persist them; this component holds no source of truth.
 import { useEffect, useState } from "react";
 import type { Settings, TabMode, DesignSettings, FontFamily, BorderRadius, SpacingScale, ShadowIntensity, SkillInfo } from "../lib/store";
-import { DEFAULT_DESIGN } from "../lib/store";
+import { DEFAULT_DESIGN, effectiveEngineModel, effectiveEngineReasoning } from "../lib/store";
 import { api, type ModelOption } from "../lib/api";
 import { FONT_OPTIONS, loadFont } from "../lib/fonts";
 import { FUN_VARIANTS, funLabel, type FunVariant } from "./FunBackground";
@@ -16,7 +16,7 @@ interface Props {
   settings: Settings;
   models: ModelOption[];
   engines: ModelOption[];
-  skills: { humanizer: boolean; gemini: boolean; opencode: boolean; cursor: boolean; copilot: boolean };
+  skills: { humanizer: boolean; gemini: boolean; opencode: boolean; cursor: boolean; copilot: boolean; codex: boolean };
   availableSkills: SkillInfo[];
   defaultMode: TabMode;
   design: DesignSettings;
@@ -46,6 +46,13 @@ function StatusTip({ ok, tip, label }: { ok: boolean; tip: string; label?: strin
   );
 }
 
+const REASONING_PRESETS = ["low", "medium", "high", "minimal", "max", "xhigh"];
+
+function engineCliName(engine: Settings["engine"]): string {
+  if (engine === "gemini") return "agy";
+  return engine;
+}
+
 export function SettingsPanel({
   settings,
   models,
@@ -73,6 +80,28 @@ export function SettingsPanel({
   const [skillBusy, setSkillBusy] = useState(false);
   const [skillError, setSkillError] = useState("");
   const [skillOk, setSkillOk] = useState("");
+  const currentModel = effectiveEngineModel(settings);
+  const currentReasoning = effectiveEngineReasoning(settings);
+  const selectedEngineAvailable =
+    settings.engine === "claude" || Boolean(skills[settings.engine as keyof typeof skills]);
+
+  const setEngineModel = (model: string) => {
+    const engineModels = { ...(settings.engineModels ?? {}), [settings.engine]: model };
+    onChange({
+      engineModels,
+      ...(settings.engine === "claude" ? { model } : {}),
+    });
+  };
+
+  const setEngineReasoning = (reasoning: string) => {
+    const engineReasoning = { ...(settings.engineReasoning ?? {}), [settings.engine]: reasoning };
+    const effort =
+      reasoning === "low" || reasoning === "medium" || reasoning === "high" ? reasoning : settings.effort;
+    onChange({
+      engineReasoning,
+      ...(settings.engine === "claude" ? { effort } : {}),
+    });
+  };
 
   const submitSkill = async () => {
     setSkillBusy(true);
@@ -162,56 +191,82 @@ export function SettingsPanel({
               {settings.engine !== "claude" && (
                 <span className="field-label-tips">
                   <StatusTip
-                    ok={!!skills[settings.engine as keyof typeof skills]}
+                    ok={selectedEngineAvailable}
                     tip={
-                      skills[settings.engine as keyof typeof skills]
-                        ? `${settings.engine === "gemini" ? "agy" : settings.engine} CLI found. Model & reasoning effort are Claude-only and ignored here.`
-                        : `${settings.engine === "gemini" ? "agy" : settings.engine} CLI not found on PATH — install it or switch back to Claude.`
+                      selectedEngineAvailable
+                        ? `${engineCliName(settings.engine)} CLI found. Model and reasoning are passed where this CLI supports flags.`
+                        : `${engineCliName(settings.engine)} CLI not found on PATH — install it or switch back to Claude.`
                     }
                   />
                 </span>
               )}
             </span>
-            <select
-              value={settings.engine}
-              onChange={(e) => onChange({ engine: e.target.value as Settings["engine"] })}
-            >
-              {engines.map((en) => {
-                const isAvailable = en.id === "claude" || skills[en.id as keyof typeof skills];
-                return (
-                  <option key={en.id} value={en.id}>
-                    {en.label} {isAvailable ? "" : " (not found)"}
-                  </option>
-                );
-              })}
-            </select>
+            <div className="engine-select-row">
+              <select
+                value={settings.engine}
+                onChange={(e) => onChange({ engine: e.target.value as Settings["engine"] })}
+              >
+                {engines.map((en) => {
+                  const isAvailable = en.id === "claude" || skills[en.id as keyof typeof skills];
+                  const selected = settings.engine === en.id;
+                  return (
+                    <option key={en.id} value={en.id}>
+                      {selected ? "✓ " : ""}{en.label} {isAvailable ? "" : " (not found)"}
+                    </option>
+                  );
+                })}
+              </select>
+              <button
+                className="default-agent-check"
+                type="button"
+                title="Selected default agent"
+                aria-label="Selected default agent"
+                onClick={() => onChange({ engine: settings.engine })}
+              >
+                ✓
+              </button>
+            </div>
+          </label>
+
+          <label className="field" style={{ marginTop: "var(--space-2)" }}>
+            <span>Model</span>
+            <input
+              list="engine-model-options"
+              type="text"
+              value={currentModel}
+              placeholder={settings.engine === "opencode" ? "provider/model" : "model id"}
+              spellCheck={false}
+              onChange={(e) => setEngineModel(e.target.value)}
+            />
+            <datalist id="engine-model-options">
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+              <option value="auto" />
+            </datalist>
+          </label>
+
+          <label className="field" style={{ marginTop: "var(--space-2)" }}>
+            <span>Reasoning effort</span>
+            <input
+              list="engine-reasoning-options"
+              type="text"
+              value={currentReasoning}
+              placeholder="low, medium, high, max..."
+              spellCheck={false}
+              onChange={(e) => setEngineReasoning(e.target.value)}
+            />
+            <datalist id="engine-reasoning-options">
+              {REASONING_PRESETS.map((r) => (
+                <option key={r} value={r} />
+              ))}
+            </datalist>
           </label>
 
           {settings.engine === "claude" && (
             <>
-              <label className="field" style={{ marginTop: "var(--space-2)" }}>
-                <span>Model</span>
-                <select value={settings.model} onChange={(e) => onChange({ model: e.target.value })}>
-                  {models.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="field" style={{ marginTop: "var(--space-2)" }}>
-                <span>Reasoning effort</span>
-                <select
-                  value={settings.effort}
-                  onChange={(e) => onChange({ effort: e.target.value as Settings["effort"] })}
-                >
-                  <option value="low">Low</option>
-                  <option value="medium">Medium</option>
-                  <option value="high">High</option>
-                </select>
-              </label>
-
               <label className="field" style={{ marginTop: "var(--space-2)" }}>
                 <span>Cleanup model</span>
                 <select

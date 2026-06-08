@@ -4,6 +4,7 @@
 // inputs are replaced by the VaultWriter. Settings can be overridden per tab.
 import { useState } from "react";
 import type { Settings, Tab, SkillInfo } from "../lib/store";
+import { effectiveEngineModel, effectiveEngineReasoning } from "../lib/store";
 import type { ModelOption } from "../lib/api";
 import { AnswerStream } from "./AnswerStream";
 import { ActivityLog } from "./ActivityLog";
@@ -15,7 +16,7 @@ interface Props {
   globalSettings: Settings;
   models: ModelOption[];
   engines: ModelOption[];
-  skills: { humanizer: boolean; gemini: boolean; opencode: boolean; cursor: boolean; copilot: boolean };
+  skills: { humanizer: boolean; gemini: boolean; opencode: boolean; cursor: boolean; copilot: boolean; codex: boolean };
   availableSkills: SkillInfo[];
   onPatch: (patch: Partial<Tab>) => void;
   onGenerate: () => void;
@@ -45,6 +46,24 @@ export function TabView({ tab, globalSettings, models, engines, skills, availabl
   const ov = tab.override ?? globalSettings;
   const setOverride = (patch: Partial<Settings>) =>
     onPatch({ override: { ...(tab.override ?? globalSettings), ...patch } });
+  const ovModel = effectiveEngineModel(ov);
+  const ovReasoning = effectiveEngineReasoning(ov);
+
+  const setOverrideModel = (model: string) => {
+    setOverride({
+      engineModels: { ...(ov.engineModels ?? {}), [ov.engine]: model },
+      ...(ov.engine === "claude" ? { model } : {}),
+    });
+  };
+
+  const setOverrideReasoning = (reasoning: string) => {
+    const effort =
+      reasoning === "low" || reasoning === "medium" || reasoning === "high" ? reasoning : ov.effort;
+    setOverride({
+      engineReasoning: { ...(ov.engineReasoning ?? {}), [ov.engine]: reasoning },
+      ...(ov.engine === "claude" ? { effort } : {}),
+    });
+  };
 
   const toggleOverride = (on: boolean) =>
     onPatch({ overrideEnabled: on, override: on ? tab.override ?? { ...globalSettings } : tab.override });
@@ -165,28 +184,44 @@ export function TabView({ tab, globalSettings, models, engines, skills, availabl
             {ov.engine !== "claude" && !skills[ov.engine as keyof typeof skills] && (
               <div className="vault-status bad">{ov.engine === "gemini" ? "agy" : ov.engine} CLI not found on PATH</div>
             )}
-            {ov.engine === "claude" && (
-              <>
-                <label className="field">
-                  <span>Model</span>
-                  <select value={ov.model} onChange={(e) => setOverride({ model: e.target.value })}>
-                    {models.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="field">
-                  <span>Effort</span>
-                  <select value={ov.effort} onChange={(e) => setOverride({ effort: e.target.value as Settings["effort"] })}>
-                    <option value="low">Low</option>
-                    <option value="medium">Medium</option>
-                    <option value="high">High</option>
-                  </select>
-                </label>
-              </>
-            )}
+            <label className="field">
+              <span>Model</span>
+              <input
+                list={`override-model-options-${tab.id}`}
+                type="text"
+                value={ovModel}
+                placeholder={ov.engine === "opencode" ? "provider/model" : "model id"}
+                spellCheck={false}
+                onChange={(e) => setOverrideModel(e.target.value)}
+              />
+              <datalist id={`override-model-options-${tab.id}`}>
+                {models.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+                <option value="auto" />
+              </datalist>
+            </label>
+            <label className="field">
+              <span>Effort</span>
+              <input
+                list={`override-reasoning-options-${tab.id}`}
+                type="text"
+                value={ovReasoning}
+                placeholder="low, medium, high, max..."
+                spellCheck={false}
+                onChange={(e) => setOverrideReasoning(e.target.value)}
+              />
+              <datalist id={`override-reasoning-options-${tab.id}`}>
+                <option value="low" />
+                <option value="medium" />
+                <option value="high" />
+                <option value="minimal" />
+                <option value="max" />
+                <option value="xhigh" />
+              </datalist>
+            </label>
             {!isAsk && (
               <label className="field-row">
                 <input type="checkbox" checked={ov.humanize} onChange={(e) => setOverride({ humanize: e.target.checked })} />

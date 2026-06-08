@@ -6,7 +6,7 @@ import { detectSkills, listSkills, createSkill } from "./agent/skills";
 import { geminiAvailable, cliAvailable } from "./agent/gemini";
 import { readLogs, appendLog, clearLogs } from "./agent/logs";
 import { fetchClaudeUsage } from "./agent/usage";
-import { loadConfig, saveConfig, defaultSettings, MODELS, ENGINES, DEFAULT_VAULT, type Settings } from "./agent/config";
+import { loadConfig, saveConfig, defaultSettings, mergeSettings, MODELS, ENGINES, DEFAULT_VAULT, type Settings } from "./agent/config";
 import { stat } from "fs/promises";
 import { join } from "path";
 
@@ -55,7 +55,7 @@ function sse(handler: (emit: (event: string, data: unknown) => void) => Promise<
 // Merge global config with a per-request settings override coming from the client.
 async function resolveSettings(override: Partial<Settings> | undefined): Promise<Settings> {
   const global = await loadConfig();
-  const merged = { ...global, ...(override || {}) } as Settings;
+  const merged = mergeSettings(global, override);
   if (!merged.vaultDir) merged.vaultDir = DEFAULT_VAULT;
   return merged;
 }
@@ -107,6 +107,7 @@ const server = Bun.serve({
         opencode: cliAvailable("opencode"),
         cursor: cliAvailable("cursor"),
         copilot: cliAvailable("copilot"),
+        codex: cliAvailable("codex"),
       });
     },
 

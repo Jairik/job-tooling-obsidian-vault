@@ -1,5 +1,12 @@
 import { describe, test, expect } from "bun:test";
-import { cliAvailable, geminiAvailable, gatherVaultContext, runCliTurn } from "./gemini";
+import {
+  CLI_ARG_PROMPT_SOFT_LIMIT_BYTES,
+  buildCliCommand,
+  cliAvailable,
+  geminiAvailable,
+  gatherVaultContext,
+  runCliTurn,
+} from "./gemini";
 import {
   buildCliAskPrompt,
   buildCliDraftPrompt,
@@ -11,6 +18,10 @@ import {
   buildFillinScanPrompt,
   buildFillinAnswerPrompt,
   buildWriteCleanupPrompt,
+  defaultSettings,
+  effectiveEngineModel,
+  effectiveEngineReasoning,
+  normalizeSettings,
 } from "./config";
 import { mkdtemp, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
@@ -22,7 +33,7 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
     // Claude is always assumed true since it's managed via SDK
     expect(cliAvailable("claude")).toBe(true);
 
-    const engines = ["gemini", "opencode", "cursor", "copilot"] as const;
+    const engines = ["gemini", "opencode", "cursor", "copilot", "codex"] as const;
     for (const en of engines) {
       const detected = cliAvailable(en);
       console.log(`Autodetected engine ${en}: ${detected}`);
@@ -99,8 +110,109 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
     expect(cln).toContain("Do not use any tools");
   });
 
+  test("settings backfill per-engine model and reasoning defaults", () => {
+    const settings = normalizeSettings({
+      ...defaultSettings(),
+      engine: "codex",
+      model: "legacy-claude-model",
+      effort: "high",
+      engineModels: { codex: "gpt-5.2-codex" },
+      engineReasoning: { codex: "max" },
+    });
+
+    expect(settings.engineModels.claude).toBe("legacy-claude-model");
+    expect(settings.engineReasoning.claude).toBe("high");
+    expect(effectiveEngineModel(settings, "codex")).toBe("gpt-5.2-codex");
+    expect(effectiveEngineReasoning(settings, "codex")).toBe("max");
+  });
+
+  test("CLI command builder passes custom model and reasoning settings", () => {
+    const settings = normalizeSettings({
+      ...defaultSettings(),
+      engineModels: {
+        gemini: "gemini-2.5-pro",
+        opencode: "openai/gpt-5.2",
+        cursor: "cursor-custom",
+        copilot: "gpt-5.2",
+        codex: "gpt-5.2-codex",
+      },
+      engineReasoning: {
+        gemini: "medium",
+        opencode: "max",
+        cursor: "low",
+        copilot: "xhigh",
+        codex: "high",
+      },
+    });
+
+    const gemini = buildCliCommand("gemini", { prompt: "PROMPT", settings });
+    expect(gemini.writeToStdin).toBe(true);
+    expect(gemini.cmd).toContain("--model");
+    expect(gemini.cmd).toContain("gemini-2.5-pro");
+    expect(gemini.prompt).toContain("Reasoning effort: medium");
+
+    const opencode = buildCliCommand("opencode", { prompt: "PROMPT", settings });
+    expect(opencode.writeToStdin).toBe(true);
+    expect(opencode.cmd).toContain("--model");
+    expect(opencode.cmd).toContain("openai/gpt-5.2");
+    expect(opencode.cmd).toContain("--variant");
+    expect(opencode.cmd).toContain("max");
+    expect(opencode.cmd.join("\n")).not.toContain("PROMPT");
+
+    const copilot = buildCliCommand("copilot", { prompt: "PROMPT", settings });
+    expect(copilot.writeToStdin).toBe(true);
+    expect(copilot.cmd).toContain("--model");
+    expect(copilot.cmd).toContain("gpt-5.2");
+    expect(copilot.cmd).toContain("--reasoning-effort");
+    expect(copilot.cmd).toContain("xhigh");
+    expect(copilot.cmd.join("\n")).not.toContain("PROMPT");
+
+    const codex = buildCliCommand("codex", { prompt: "PROMPT", settings });
+    expect(codex.writeToStdin).toBe(true);
+    expect(codex.cmd).toContain("exec");
+    expect(codex.cmd).toContain("--model");
+    expect(codex.cmd).toContain("gpt-5.2-codex");
+    expect(codex.cmd).toContain('model_reasoning_effort="high"');
+
+    const cursor = buildCliCommand("cursor", { prompt: "PROMPT", settings });
+    expect(cursor.writeToStdin).toBe(true);
+    expect(cursor.cmd).toContain("--model");
+    expect(cursor.cmd).toContain("cursor-custom");
+    expect(cursor.cmd.join("\n")).not.toContain("PROMPT");
+    expect(cursor.prompt).toContain("Reasoning effort: low");
+  });
+
+  test("CLI command builder transports current long prompts safely", () => {
+    const settings = normalizeSettings(defaultSettings());
+    const longPrompt = `Return exactly VA_LONG_PROMPT_OK.\n\n${"vault context line\n".repeat(10_000)}`;
+    expect(new TextEncoder().encode(longPrompt).length).toBeGreaterThan(150_000);
+
+    for (const engine of ["gemini", "opencode", "cursor", "copilot", "codex"] as const) {
+      const built = buildCliCommand(engine, { prompt: longPrompt, settings });
+      expect(built.writeToStdin).toBe(true);
+      expect(built.cmd.join("\n")).not.toContain(longPrompt);
+      expect(built.prompt).toContain("VA_LONG_PROMPT_OK");
+    }
+  });
+
+  test("CLI command builder keeps oversized prompts off argv for all supported CLI engines", () => {
+    const settings = normalizeSettings(defaultSettings());
+    const tooLarge = "x".repeat(CLI_ARG_PROMPT_SOFT_LIMIT_BYTES + 1);
+    for (const engine of ["gemini", "opencode", "cursor", "copilot", "codex"] as const) {
+      const built = buildCliCommand(engine, { prompt: tooLarge, settings });
+      expect(built.writeToStdin).toBe(true);
+      expect(built.cmd.join("\n")).not.toContain(tooLarge);
+      expect(built.prompt.length).toBe(tooLarge.length);
+    }
+  });
+
   test("runCliTurn executes and streams outputs for all autodetected CLI tools", async () => {
-    const enginesToTest = ["gemini", "opencode", "cursor", "copilot"] as const;
+    if (process.env.RUN_REAL_CLI_TESTS !== "1") {
+      console.log("Skipping real CLI execution audit. Set RUN_REAL_CLI_TESTS=1 to run it.");
+      return;
+    }
+
+    const enginesToTest = ["gemini", "opencode", "cursor", "copilot", "codex"] as const;
 
     for (const engine of enginesToTest) {
       if (cliAvailable(engine)) {

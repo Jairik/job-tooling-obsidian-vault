@@ -6,9 +6,10 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { join } from "path";
 import {
-  REASONING,
   DEFAULT_MODEL,
   DEFAULT_CLEANUP_MODEL,
+  claudeReasoningTokens,
+  effectiveEngineModel,
   ASK_PERSONA,
   buildAppend,
   buildDraftPrompt,
@@ -111,8 +112,8 @@ async function runTurn(args: TurnArgs): Promise<{ text: string; sessionId?: stri
 
   const options: any = {
     cwd: args.settings.vaultDir,
-    model: args.settings.model || DEFAULT_MODEL,
-    maxThinkingTokens: REASONING[args.settings.effort] ?? REASONING.medium,
+    model: effectiveEngineModel(args.settings, "claude") || DEFAULT_MODEL,
+    maxThinkingTokens: claudeReasoningTokens(args.settings),
     settingSources: ["user", "project"],
     allowedTools: args.allowedTools ?? DEFAULT_TOOLS,
     permissionMode: "bypassPermissions",
@@ -260,6 +261,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
         phase: "draft",
         emit,
         abort,
+        settings: args.settings,
       });
     } else {
       const ans = await runTurn({
@@ -299,6 +301,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
       phase: "draft",
       emit,
       abort,
+      settings: args.settings,
     });
     emit("draft", { text: draft });
     finalText = draft;
@@ -310,6 +313,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
         phase: "humanize",
         emit,
         abort,
+        settings: args.settings,
       });
       if (hum) finalText = hum;
     }
@@ -405,6 +409,7 @@ export async function followUp(tabId: string, args: FollowUpArgs, emit: Emit): P
       phase: "followup",
       emit,
       abort,
+      settings: args.settings,
     });
   } else {
     // With RAG on, refresh excerpts for the tweak and keep file-browsing disabled.
@@ -469,6 +474,7 @@ export async function cleanup(tabId: string, args: CleanupArgs, emit: Emit): Pro
       phase: "cleanup",
       emit,
       abort,
+      settings: args.settings,
     });
     if (out) cleaned = out;
   } else {
@@ -477,6 +483,8 @@ export async function cleanup(tabId: string, args: CleanupArgs, emit: Emit): Pro
       ...args.settings,
       model: args.settings.cleanupModel || DEFAULT_CLEANUP_MODEL,
       effort: "low",
+      engineModels: { ...(args.settings.engineModels ?? {}), claude: args.settings.cleanupModel || DEFAULT_CLEANUP_MODEL },
+      engineReasoning: { ...(args.settings.engineReasoning ?? {}), claude: "low" },
     };
     const note = buildSkillsNote(skillNotes);
     const baseAppend = buildCleanupAppend(skills.humanizer);
@@ -535,6 +543,7 @@ export async function summarize(tabId: string, args: SummarizeArgs, emit: Emit):
       phase: "draft",
       emit,
       abort,
+      settings: args.settings,
     });
   } else {
     const note = buildSkillsNote(skillNotes);
@@ -600,11 +609,12 @@ export async function autoPlace(tabId: string, args: AutoPlaceArgs, emit: Emit):
       phase: "draft",
       emit,
       abort,
+      settings: args.settings,
     });
   } else {
     const r = await runTurn({
       prompt: buildAutoPlacePrompt(args.content, structure),
-      settings: { ...args.settings, effort: "low" },
+      settings: { ...args.settings, effort: "low", engineReasoning: { ...(args.settings.engineReasoning ?? {}), claude: "low" } },
       append: "Suggest the best file path in the vault for this content. Respond with ONLY the path.",
       allowedTools: ["Skill"],
       phase: "draft",
@@ -648,6 +658,7 @@ export async function fillinScan(tabId: string, args: FillinScanArgs, emit: Emit
       phase: "draft",
       emit,
       abort,
+      settings: args.settings,
     });
   } else {
     const r = await runTurn({
@@ -696,6 +707,7 @@ export async function fillinWrite(tabId: string, args: FillinWriteArgs, emit: Em
       phase: "draft",
       emit,
       abort,
+      settings: args.settings,
     });
   } else {
     const note = buildSkillsNote(skillNotes);
@@ -742,6 +754,7 @@ export async function writeCleanup(tabId: string, args: WriteCleanupArgs, emit: 
       phase: "cleanup",
       emit,
       abort,
+      settings: args.settings,
     });
     if (out) finalText = out;
   } else {
@@ -749,7 +762,13 @@ export async function writeCleanup(tabId: string, args: WriteCleanupArgs, emit: 
     const baseAppend = "Clean up and format the text into well-structured vault markdown.";
     const r = await runTurn({
       prompt: buildWriteCleanupPrompt(args.text),
-      settings: { ...args.settings, model: args.settings.cleanupModel || DEFAULT_CLEANUP_MODEL, effort: "low" },
+      settings: {
+        ...args.settings,
+        model: args.settings.cleanupModel || DEFAULT_CLEANUP_MODEL,
+        effort: "low",
+        engineModels: { ...(args.settings.engineModels ?? {}), claude: args.settings.cleanupModel || DEFAULT_CLEANUP_MODEL },
+        engineReasoning: { ...(args.settings.engineReasoning ?? {}), claude: "low" },
+      },
       append: note ? `${baseAppend}\n\n${note}` : baseAppend,
       allowedTools: ["Skill"],
       phase: "cleanup",

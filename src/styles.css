@@ -558,6 +558,16 @@ textarea, input[type="text"], input[type="number"], select {
   resize: vertical; outline: none;
   transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
 }
+.engine-select-row { display: grid; grid-template-columns: minmax(0, 1fr) 34px; gap: 8px; align-items: center; }
+.default-agent-check {
+  display: inline-grid; place-items: center; width: 34px; height: 34px;
+  border-radius: var(--radius-1);
+  border: 1px solid color-mix(in oklch, var(--accent) 46%, var(--border));
+  background: color-mix(in oklch, var(--accent) 14%, var(--surface));
+  color: color-mix(in oklch, var(--accent) 78%, var(--fg));
+  font-family: var(--font-mono); font-size: var(--fs-3); cursor: pointer;
+}
+.default-agent-check:hover { background: color-mix(in oklch, var(--accent) 20%, var(--surface)); }
 textarea.mono { font-family: var(--font-mono); font-size: 12.5px; line-height: 1.55; }
 textarea:focus, input:focus, select:focus {
   border-color: color-mix(in oklch, var(--accent) 60%, var(--border));

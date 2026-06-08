@@ -82,7 +82,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     }).then((r) => r.json()),
-  skills: (vault: string): Promise<{ humanizer: boolean; gemini: boolean; opencode: boolean; cursor: boolean; copilot: boolean }> =>
+  skills: (vault: string): Promise<{ humanizer: boolean; gemini: boolean; opencode: boolean; cursor: boolean; copilot: boolean; codex: boolean }> =>
     fetch(`/api/skills/status?vault=${encodeURIComponent(vault)}`).then((r) => r.json()),
   listSkills: (vault: string): Promise<SkillInfo[]> =>
     fetch(`/api/skills/list?vault=${encodeURIComponent(vault)}`).then((r) => r.json()),
