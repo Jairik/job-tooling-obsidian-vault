@@ -100,6 +100,8 @@ function tomlString(value: string): string {
   return JSON.stringify(value);
 }
 
+/* Build CLI command + prompt for a given engine. All engines use stdin transport
+   to avoid argv length limits. Returns {cmd, prompt, writeToStdin}. */
 export function buildCliCommand(engine: Engine, args: { prompt: string; settings?: Settings }): CliCommand {
   const model = args.settings ? effectiveEngineModel(args.settings, engine) : "";
   const reasoning = args.settings ? effectiveEngineReasoning(args.settings, engine) : "";

@@ -30,7 +30,7 @@ export function AnswerStream({ phase, mode, draft, answer, notice, error, onEdit
   const [showDraft, setShowDraft] = useState(false);
   const [copied, setCopied] = useState(false);
   const running = phase === "draft" || phase === "humanize" || phase === "cleanup" || phase === "followup";
-  // While drafting (before humanize), show the draft text live in the main panel.
+  // During draft phase show draft; after humanize show answer (fallback to draft).
   const display = phase === "draft" ? draft : answer || draft;
   const hasContent = Boolean(answer || draft);
 

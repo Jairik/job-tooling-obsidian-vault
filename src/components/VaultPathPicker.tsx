@@ -91,9 +91,7 @@ export function VaultPathPicker({ vaultDir, value, onChange, allowNewFile, place
     onChange(selectedDir ? `${selectedDir}/${file}` : file);
   };
 
-  // The tree is always fully expanded (no per-node collapse state); filtering just
-  // hides non-matching branches. A node survives the filter if it matches, or if a
-  // child/grandchild matches — so a deep match keeps its ancestors visible.
+  // Fully-expanded tree with filter: a node survives if it or any descendant matches.
   const renderTree = (nodes: TreeNode[], depth = 0) => {
     return nodes.map(node => {
       const match = node.name.toLowerCase().includes(filter.toLowerCase());

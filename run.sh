@@ -14,7 +14,7 @@ if [ -f .env ]; then set -a; . ./.env; set +a; fi
 echo "Installing dependencies..."
 bun install
 
-PORT="${PORT:-5173}"
+PORT="${PORT:-5177}"
 echo ""
 echo "Vault Assistant starting on http://localhost:${PORT}"
 echo "Press Ctrl+C to stop."

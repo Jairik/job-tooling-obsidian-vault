@@ -277,6 +277,9 @@ export function App() {
     setRightId("");
   };
 
+  /* ── Tab run handlers ─────────────────────────────────────────────────── */
+  // Each run* handler opens an SSE stream, folds events into tab state.
+  // An AbortController per tab lets us cancel in-flight runs.
   const runGenerate = (tab: Tab) => {
     if (!settings) return;
     controllers.current.get(tab.id)?.abort();
@@ -353,6 +356,7 @@ export function App() {
       .finally(() => controllers.current.delete(tab.id));
   };
 
+  // Follow-up: resumes server session (Claude) or passes prior answer (CLI).
   const runFollowUp = (tab: Tab, text: string) => {
     if (!settings) return;
     controllers.current.get(tab.id)?.abort();
@@ -485,8 +489,8 @@ export function App() {
     api.cancel(id).catch(() => {});
   };
 
-  // ── Vault Writer Handlers ─────────────────────────────────────────────────
-
+  /* ── Vault Writer Handlers ───────────────────────────────────────────── */
+  // Summarize: fetch URL if needed, stream summary into writePreview.
   const runSummarize = async (tab: Tab) => {
     if (!settings) return;
     controllers.current.get(tab.id)?.abort();
@@ -551,6 +555,7 @@ export function App() {
     }).finally(() => controllers.current.delete(tab.id));
   };
 
+  // Fill-in scan: agent returns JSON array of questions about vault gaps.
   const runFillinScan = (tab: Tab) => {
     if (!settings) return;
     controllers.current.get(tab.id)?.abort();
@@ -723,6 +728,7 @@ export function App() {
     error: "error",
   };
 
+  /* Render a single pane's TabView wired to tab state and run callbacks. */
   const renderPane = (paneTab: Tab) => (
     <TabView
       key={paneTab.id}

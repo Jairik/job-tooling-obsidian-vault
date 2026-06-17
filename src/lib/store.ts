@@ -125,6 +125,8 @@ function asEffort(value: unknown): Effort | undefined {
   return value === "low" || value === "medium" || value === "high" ? value : undefined;
 }
 
+/* Normalize raw localStorage settings into a full Settings object.
+   Backfills new fields with defaults; maps old model/effort → per-engine maps. */
 export function normalizeSettings(raw: Partial<Settings>): Settings {
   const engineModels = { ...defaultEngineModels(), ...(raw.engineModels ?? {}) };
   const engineReasoning = { ...defaultEngineReasoning(), ...(raw.engineReasoning ?? {}) };
@@ -151,6 +153,7 @@ export function normalizeSettings(raw: Partial<Settings>): Settings {
   };
 }
 
+/* Deep-merge base Settings with a UI patch; only explicit keys overwrite. */
 export function mergeSettings(base: Settings, patch: Partial<Settings>): Settings {
   return normalizeSettings({
     ...base,
@@ -160,6 +163,7 @@ export function mergeSettings(base: Settings, patch: Partial<Settings>): Setting
   });
 }
 
+/* Effective model for a given engine: per-engine map first, then fallback. */
 export function effectiveEngineModel(settings: Settings, engine: Engine = settings.engine): string {
   const configured = settings.engineModels?.[engine]?.trim();
   if (configured) return configured;
@@ -266,7 +270,7 @@ const FILLERS = /^(please\s+|can you\s+|could you\s+|in (a|one)[^,]*,\s*|tell us
 
 const COMPANY_STOP = new Set(["we", "the", "our", "you", "your", "this", "that", "a", "an", "i", "it", "they"]);
 
-// Pull a likely company name out of the job description, fully offline.
+/* Extract a likely company name from the JD via pattern matching (offline). */
 function extractCompany(jobDescription: string): string {
   const text = jobDescription.replace(/\s+/g, " ").trim();
   if (!text) return "";
@@ -340,9 +344,8 @@ export function newTab(existing: Tab[] = [], ragDefault = false, mode: TabMode =
   };
 }
 
-// A new conversation that reuses an existing tab's context (job description +
-// RAG/YC/override settings) but starts fresh: new id → new server session, blank
-// question, empty answer/messages, its own color and auto-name.
+/* Clone a tab's context into a fresh conversation (new id, blank question).
+   Powers "+ New question" — same job, separate session. */
 export function cloneTabForNewQuestion(source: Tab, existing: Tab[]): Tab {
   const base = newTab(existing, source.rag, source.mode);
   return {
@@ -366,6 +369,8 @@ export function overrideSettingsBody(tab: Tab, global: Settings): Settings | und
   return { ...tab.override, persona: global.persona };
 }
 
+/* Deserialize tabs from localStorage. Backfills new fields, resets transient
+   running phases (draft/humanize/cleanup/followup → idle) on reload. */
 export function loadTabs(): Tab[] {
   try {
     const raw = localStorage.getItem(TABS_KEY);

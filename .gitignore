@@ -5,3 +5,10 @@ config.json
 *.log
 logs/
 bun.lock
+**.cursor/
+**.codex/
+**.gemini/
+**.opencode/
+**.copilot/
+**.claude/
+**.agents/

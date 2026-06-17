@@ -13,6 +13,7 @@ import {
   buildCliHumanizePrompt,
   buildCliCleanupPrompt,
   buildCliFollowupPrompt,
+  buildInlineSkillsNote,
   buildSummarizePrompt,
   buildAutoPlacePrompt,
   buildFillinScanPrompt,
@@ -23,7 +24,7 @@ import {
   effectiveEngineReasoning,
   normalizeSettings,
 } from "./config";
-import { mkdtemp, rm, writeFile } from "fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -108,6 +109,55 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
     const cln = buildWriteCleanupPrompt("dirty md");
     expect(cln).toContain("dirty md");
     expect(cln).toContain("Do not use any tools");
+  });
+
+  test("Codex receives selected skill instructions inline while Claude keeps Skill tool notes", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "jas-skill-test-"));
+    const skillName = "codex-inline-test-skill";
+    const skillDir = join(tempDir, ".claude", "skills", skillName);
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(
+      join(skillDir, "SKILL.md"),
+      `---\nname: ${skillName}\ndescription: Tightens answers for Codex tests.\n---\n\nAlways apply MARKER-CODEX-SKILL when this skill is selected.\n`,
+      "utf8"
+    );
+
+    try {
+      const { resolveSkillNotes } = await import("./runner");
+      const emit = (events: string[]) => (event: string, data: any) => {
+        if (event === "notice") events.push(String(data?.message ?? ""));
+      };
+
+      const codexNotices: string[] = [];
+      const codexSettings = normalizeSettings({ ...defaultSettings(tempDir), engine: "codex" });
+      const codexNotes = await resolveSkillNotes(codexSettings, [skillName], emit(codexNotices));
+      expect(codexNotices).toEqual([]);
+      expect(codexNotes).toHaveLength(1);
+      expect(codexNotes[0].name).toBe(skillName);
+      expect(codexNotes[0].content).toContain("MARKER-CODEX-SKILL");
+
+      const codexPrompt = buildCliDraftPrompt("persona", "vault context", "jd", "question", codexNotes);
+      expect(codexPrompt).toContain("SKILLS");
+      expect(codexPrompt).toContain("Tightens answers for Codex tests.");
+      expect(codexPrompt).toContain("MARKER-CODEX-SKILL");
+
+      const inlineNote = buildInlineSkillsNote(codexNotes);
+      expect(inlineNote).toContain("Do not try to invoke external skill tools");
+
+      const claudeNotices: string[] = [];
+      const claudeSettings = normalizeSettings({ ...defaultSettings(tempDir), engine: "claude" });
+      const claudeNotes = await resolveSkillNotes(claudeSettings, [skillName], emit(claudeNotices));
+      expect(claudeNotices).toEqual([]);
+      expect(claudeNotes).toEqual([{ name: skillName, description: "Tightens answers for Codex tests." }]);
+
+      const geminiNotices: string[] = [];
+      const geminiSettings = normalizeSettings({ ...defaultSettings(tempDir), engine: "gemini" });
+      const geminiNotes = await resolveSkillNotes(geminiSettings, [skillName], emit(geminiNotices));
+      expect(geminiNotes).toEqual([]);
+      expect(geminiNotices[0]).toContain("supported on Claude and Codex");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   test("settings backfill per-engine model and reasoning defaults", () => {
@@ -262,6 +312,17 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
     const workflowMd = await Bun.file(workflowMdPath).text();
     expect(workflowMd.length).toBeGreaterThan(0);
     expect(workflowMd).toContain("must be accompanied by a test");
+  });
+
+  test("default development port is 5177 everywhere", async () => {
+    const rootPath = join(__dirname, "..");
+    const serverTs = await Bun.file(join(rootPath, "server.ts")).text();
+    const runSh = await Bun.file(join(rootPath, "run.sh")).text();
+    const readme = await Bun.file(join(rootPath, "README.md")).text();
+
+    expect(serverTs).toContain("process.env.PORT || 5177");
+    expect(runSh).toContain('PORT="${PORT:-5177}"');
+    expect(readme).toContain("http://localhost:5177");
   });
 
   test("new-question clones preserve job context and follow the current system prompt", async () => {

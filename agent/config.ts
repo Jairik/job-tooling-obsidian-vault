@@ -127,6 +127,8 @@ function asEffort(value: unknown): Effort | undefined {
   return value === "low" || value === "medium" || value === "high" ? value : undefined;
 }
 
+/* Normalize a partial saved config into a full Settings object. Handles backward
+   compatibility (old top-level model/effort fields → per-engine maps). */
 export function normalizeSettings(saved: Partial<Settings> = {}, vaultDir = DEFAULT_VAULT): Settings {
   const base = defaultSettings(vaultDir);
   const raw = saved as Partial<Settings> & {
@@ -153,6 +155,7 @@ export function normalizeSettings(saved: Partial<Settings> = {}, vaultDir = DEFA
   };
 }
 
+/* Deep-merge base Settings with a patch; only explicitly-set keys overwrite. */
 export function mergeSettings(base: Settings, patch: Partial<Settings> | undefined): Settings {
   if (!patch) return normalizeSettings(base, base.vaultDir || DEFAULT_VAULT);
   return normalizeSettings(
@@ -166,6 +169,7 @@ export function mergeSettings(base: Settings, patch: Partial<Settings> | undefin
   );
 }
 
+/* Effective model for a given engine: per-engine map first, then fallback. */
 export function effectiveEngineModel(settings: Settings, engine: Engine = settings.engine): string {
   const configured = settings.engineModels?.[engine]?.trim();
   if (configured) return configured;
@@ -190,20 +194,43 @@ export function claudeReasoningTokens(settings: Settings): number {
   return REASONING[effort ?? settings.effort] ?? REASONING.medium;
 }
 
-// A skill the user has chosen to apply to this interaction. Only the name and a
-// short description are needed for the prompt note; the agent invokes it by name
-// through the Skill tool.
+// A skill the user has chosen to apply to this interaction. Claude invokes it by
+// name through the Skill tool. Codex receives the SKILL.md body inline because it
+// runs in a no-tools, read-only CLI path.
 export interface SkillNote {
   name: string;
   description: string;
+  content?: string;
 }
 
-// Render the SKILLS section of the system-prompt append from the user's selected
-// skills. Returns "" when nothing is selected.
+/* Render SKILLS section for Claude's native Skill tool. Returns "" if none. */
 export function buildSkillsNote(skills: SkillNote[] | undefined): string {
   if (!skills?.length) return "";
   const lines = skills.map((s) => `  - ${s.name}: ${s.description || "(no description)"}`);
   return `SKILLS\n- Apply the following skills with the Skill tool wherever they are relevant to this task. Invoke each by name:\n${lines.join("\n")}`;
+}
+
+// Render selected skills as prompt-native instructions for CLI engines that
+// cannot call Claude's Skill tool. The runner includes SKILL.md bodies only for
+// engines that support this path.
+export function buildInlineSkillsNote(skills: SkillNote[] | undefined): string {
+  if (!skills?.length) return "";
+  const sections = skills.map((s) => {
+    const description = s.description ? `Description: ${s.description}\n` : "";
+    const content = s.content?.trim() || "(no SKILL.md instructions were available; use the description above.)";
+    return `### ${s.name}\n${description}Instructions:\n"""\n${content}\n"""`;
+  });
+  return `SKILLS\n- Apply the following selected skills wherever they are relevant to this task.\n- The skill instructions are included inline. Do not try to invoke external skill tools or read additional skill files.\n\n${sections.join("\n\n")}`;
+}
+
+function cliPersonaWithSkills(persona: string, skills?: SkillNote[]): string {
+  const note = buildInlineSkillsNote(skills);
+  return note ? `${persona.trim()}\n\n${note}` : persona.trim();
+}
+
+function cliPrefixWithSkills(skills?: SkillNote[]): string {
+  const note = buildInlineSkillsNote(skills);
+  return note ? `${note}\n\n` : "";
 }
 
 interface BuildArgs {
@@ -214,9 +241,8 @@ interface BuildArgs {
   phase: "draft" | "humanize" | "followup";
 }
 
-// Compose the system-prompt append from the base persona plus phase/mode notes.
-// Ask mode is a single grounded answer turn: it skips the humanize note (that
-// belongs to the job-application pipeline). Selected skills apply to every mode.
+/* Compose the system-prompt append: persona + phase/mode notes + skills.
+   Ask mode skips the humanize note (that's job-application only). */
 export function buildAppend({ persona, mode, skills, useRag, phase }: BuildArgs): string {
   const isAsk = mode === "ask";
   const parts = [persona.trim()];
@@ -257,13 +283,13 @@ ${question.trim()}
 Answer the question above, grounded in the vault.`;
 }
 
-// RAG ask prompt (Claude engine): retrieved excerpts are the only facts available.
+/* RAG ask prompt: excerpts in user message, file-reading disabled. */
 export function buildRagAskPrompt(context: string, question: string): string {
   return `${contextBlock(context)}\n\n${buildAskPrompt(question)}\n\nGround your answer ONLY in the vault excerpts above. Do not read or search additional files.`;
 }
 
-export function buildCliAskPrompt(persona: string, context: string, question: string): string {
-  return `${persona.trim()}\n\n${contextBlock(context)}\n\n${buildAskPrompt(question)}\n\n${NO_TOOLS}`;
+export function buildCliAskPrompt(persona: string, context: string, question: string, skills?: SkillNote[]): string {
+  return `${cliPersonaWithSkills(persona, skills)}\n\n${contextBlock(context)}\n\n${buildAskPrompt(question)}\n\n${NO_TOOLS}`;
 }
 
 export function buildDraftPrompt(jobDescription: string, question: string): string {
@@ -315,13 +341,14 @@ export function buildCliDraftPrompt(
   persona: string,
   context: string,
   jobDescription: string,
-  question: string
+  question: string,
+  skills?: SkillNote[]
 ): string {
-  return `${persona.trim()}\n\n${contextBlock(context)}\n\n${buildDraftPrompt(jobDescription, question)}\n\n${NO_TOOLS}`;
+  return `${cliPersonaWithSkills(persona, skills)}\n\n${contextBlock(context)}\n\n${buildDraftPrompt(jobDescription, question)}\n\n${NO_TOOLS}`;
 }
 
-export function buildCliHumanizePrompt(draft: string): string {
-  return `${HUMANIZE_INLINE}\n\nAnswer to rewrite:\n"""\n${draft.trim()}\n"""\n\nDo not use any tools or run any commands; just return the rewritten answer.`;
+export function buildCliHumanizePrompt(draft: string, skills?: SkillNote[]): string {
+  return `${cliPrefixWithSkills(skills)}${HUMANIZE_INLINE}\n\nAnswer to rewrite:\n"""\n${draft.trim()}\n"""\n\nDo not use any tools or run any commands; just return the rewritten answer.`;
 }
 
 // ---- Clean up (lightweight grammar fix + humanize) ----
@@ -345,18 +372,20 @@ export function buildCleanupAppend(useSkill: boolean): string {
     : `CLEANUP PASS\n- Fix grammar and writing in the provided text and remove signs of AI writing. Return ONLY the final cleaned text: no commentary, no notes.`;
 }
 
-// Gemini engine has no Skill tool, so cleanup always uses the inline rules.
-export function buildCliCleanupPrompt(text: string): string {
-  return `${CLEANUP_GRAMMAR}\n${HUMANIZE_INLINE}\n\nText to clean up:\n"""\n${text.trim()}\n"""\n\nDo not use any tools or run any commands; return ONLY the cleaned text.`;
+// CLI engines have no Claude Skill tool, so cleanup uses inline rules. Codex can
+// additionally receive selected SKILL.md instructions inline.
+export function buildCliCleanupPrompt(text: string, skills?: SkillNote[]): string {
+  return `${cliPrefixWithSkills(skills)}${CLEANUP_GRAMMAR}\n${HUMANIZE_INLINE}\n\nText to clean up:\n"""\n${text.trim()}\n"""\n\nDo not use any tools or run any commands; return ONLY the cleaned text.`;
 }
 
 export function buildCliFollowupPrompt(
   persona: string,
   context: string,
   priorAnswer: string,
-  tweak: string
+  tweak: string,
+  skills?: SkillNote[]
 ): string {
-  return `${persona.trim()}
+  return `${cliPersonaWithSkills(persona, skills)}
 
 ${contextBlock(context)}
 
@@ -374,8 +403,8 @@ ${NO_TOOLS}`;
 
 // ---- Vault Writer prompts ----
 
-export function buildSummarizePrompt(text: string, vaultContext: string): string {
-  return `You are summarizing content for a personal knowledge vault.
+export function buildSummarizePrompt(text: string, vaultContext: string, skills?: SkillNote[]): string {
+  return `${cliPrefixWithSkills(skills)}You are summarizing content for a personal knowledge vault.
 
 ${contextBlock(vaultContext)}
 
@@ -425,8 +454,14 @@ Output ONLY the JSON array, no commentary or markdown fencing.
 ${NO_TOOLS}`;
 }
 
-export function buildFillinAnswerPrompt(vaultContext: string, question: string, answer: string, targetPath: string): string {
-  return `You are formatting a user's answer into a well-structured vault entry.
+export function buildFillinAnswerPrompt(
+  vaultContext: string,
+  question: string,
+  answer: string,
+  targetPath: string,
+  skills?: SkillNote[]
+): string {
+  return `${cliPrefixWithSkills(skills)}You are formatting a user's answer into a well-structured vault entry.
 
 ${contextBlock(vaultContext)}
 
@@ -441,8 +476,8 @@ Output ONLY the formatted markdown content — no commentary, no file path, no f
 ${NO_TOOLS}`;
 }
 
-export function buildWriteCleanupPrompt(text: string): string {
-  return `Clean up and format the following text into well-structured markdown for a personal knowledge vault.
+export function buildWriteCleanupPrompt(text: string, skills?: SkillNote[]): string {
+  return `${cliPrefixWithSkills(skills)}Clean up and format the following text into well-structured markdown for a personal knowledge vault.
 
 Text to clean up:
 """

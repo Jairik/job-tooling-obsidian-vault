@@ -5,6 +5,40 @@ calm surfaces, mono labels, status pills, segmented chips, and a restrained
 motion layer. It lives almost entirely in `src/styles.css` as CSS custom
 properties, so the look is driven by tokens rather than per-component styling.
 
+```mermaid
+flowchart TB
+  subgraph html["document.documentElement"]
+    theme["data-theme: dark | light"]
+    density["data-density: comfortable | compact"]
+    fun["data-fun: on (optional)"]
+    funVar["data-fun-variant: aurora | matrix | …"]
+    font["data-font-family"]
+    radius["data-border-radius"]
+    spacing["data-spacing-scale"]
+    shadow["data-shadow-intensity"]
+    accent["--accent-h / --accent-c (OKLCH)"]
+  end
+
+  subgraph sources["State sources"]
+    indexHtml["index.html inline script — theme/density preload"]
+    appTsx["App.tsx — theme, density, split, fun"]
+    designStore["DesignSettings in store.ts"]
+    stylesCss["styles.css — token definitions"]
+  end
+
+  indexHtml --> theme
+  indexHtml --> density
+  appTsx --> theme
+  appTsx --> density
+  appTsx --> fun
+  designStore --> font
+  designStore --> radius
+  designStore --> spacing
+  designStore --> shadow
+  designStore --> accent
+  stylesCss --> html
+```
+
 ## Tokens
 
 All color, type, spacing, radius, and shadow values are CSS variables on
@@ -35,6 +69,25 @@ before first paint by a tiny inline script in `src/index.html`, so there's no
 flash on reload. `App.tsx` mirrors the same values back onto `<html>` and saves
 them when they change.
 
+## Design customization
+
+Beyond theme and density, **Settings → Design** exposes `DesignSettings`
+(`src/lib/store.ts`). Changes apply via `data-*` attributes and CSS variables on
+`<html>`:
+
+| Setting | Attribute / variable | Options |
+| --- | --- | --- |
+| Font family | `data-font-family` | system, Inter, Roboto, Fira Code, JetBrains Mono, … |
+| Font scale | `--font-scale` | 0.85 – 1.15 |
+| Accent hue / chroma | `--accent-h`, `--accent-c` | OKLCH sliders |
+| Border radius | `data-border-radius` | sharp, rounded, pill, circle |
+| Spacing scale | `data-spacing-scale` | compact, comfortable, spacious |
+| Shadow intensity | `data-shadow-intensity` | none, subtle, medium, strong |
+| Toolbar layout | `toolbarDropdown` | compact dropdown vs. full toolbar row |
+
+Design prefs persist in `localStorage` (`jt.design`). Google Fonts load on demand
+via `src/lib/fonts.ts` when a non-system font is selected.
+
 ## Components
 
 These class patterns recur; reuse them rather than inventing new ones:
@@ -64,10 +117,14 @@ lifts, active presses) is always on.
 A playful escape hatch: the ✨ control in the header turns on an animated
 background (reactbits-inspired, dependency-free — implemented in
 `src/components/FunBackground.tsx`). While fun mode is on, the same control
-cycles through the variants (Aurora, Particles, Waves, Dot Grid, Mesh). The
-choice and on/off state persist, and every variant has a static fallback under
-`prefers-reduced-motion`. The app surfaces stay readable because the background
-sits behind the translucent cards.
+cycles through variants. The choice and on/off state persist in `DesignSettings`,
+and every variant has a static fallback under `prefers-reduced-motion`. The app
+surfaces stay readable because the background sits behind the translucent cards.
+
+Available variants: Aurora, Particles, Waves, Dot Grid, Mesh, Matrix Rain,
+Starfield, 3D Grid, Flicker Grid, Comet, Balatro.
+
+Configure the default variant in Settings → Design, or cycle live from the header.
 
 ## Split view
 
@@ -75,10 +132,20 @@ The header's split control (◫) opens a second pane beside the first, VS
 Code-style. The left pane follows the main tab bar; the right pane has its own
 tab selector. Each pane is an independent `TabView`, so two answers can be
 drafted or compared side by side. It collapses to a stack on narrow screens.
+State persists in `localStorage` (`jt.split`).
+
+## Quick Notes
+
+The Quick Notes drawer (header shortcut) is a local-only scratchpad: profile
+links, professional references, and labeled copy boxes for pasting into
+applications. It does not touch the server — data lives in `localStorage` via
+`loadQuickNotes()` / `saveQuickNotes()` in `src/lib/store.ts`.
 
 ## Where it lives
 
 - Tokens, themes, components, motion — `src/styles.css`
 - Theme/density/fun/split state + header + status bar — `src/App.tsx`
+- Design settings types and persistence — `src/lib/store.ts`
 - Animated backgrounds — `src/components/FunBackground.tsx`
+- Font loading — `src/lib/fonts.ts`
 - Theme preload (no-flash) — `src/index.html`

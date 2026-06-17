@@ -46,7 +46,7 @@ export function SkillPicker({ availableSkills, selected, onChange, title }: Prop
     onChange(selected.includes(name) ? selected.filter((s) => s !== name) : [...selected, name]);
   };
 
-  // Count only selections that still correspond to an installed skill.
+  // Count selections that still map to an installed skill.
   const activeCount = selected.filter((s) => availableSkills.some((a) => a.name === s)).length;
 
   return (

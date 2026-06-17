@@ -10,7 +10,7 @@ import { loadConfig, saveConfig, defaultSettings, mergeSettings, MODELS, ENGINES
 import { stat } from "fs/promises";
 import { join } from "path";
 
-const PORT = Number(process.env.PORT || 5173);
+const PORT = Number(process.env.PORT || 5177);
 const DEV = process.env.NODE_ENV !== "production";
 
 await loadSessions();

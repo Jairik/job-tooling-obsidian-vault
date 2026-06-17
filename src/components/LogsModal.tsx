@@ -61,7 +61,7 @@ export function LogsModal({ logs, onClear, onClose }: Props) {
     };
   }, [logs]);
 
-  // Tool usage: parse the tool name from the "Tool · input" detail.
+  // Tool usage: group by tool name, count, take top 8 for bar chart.
   const toolData = useMemo(() => {
     const counts = new Map<string, number>();
     for (const l of logs) {

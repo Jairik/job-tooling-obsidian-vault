@@ -19,6 +19,7 @@ export interface UsageResult {
 
 export type SSEHandlers = Record<string, (data: any) => void>;
 
+/* Parse a single SSE event from a raw text chunk. Returns null if no data. */
 function parseEvent(chunk: string): { event: string; data: any } | null {
   let event = "message";
   const dataLines: string[] = [];
@@ -35,6 +36,8 @@ function parseEvent(chunk: string): { event: string; data: any } | null {
   }
 }
 
+/* POST to a streaming SSE endpoint and dispatch events to handlers.
+   Standard EventSource only supports GET, so we read the body manually. */
 export async function streamPost(
   url: string,
   body: unknown,

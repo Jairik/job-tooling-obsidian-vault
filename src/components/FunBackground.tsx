@@ -53,7 +53,8 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
 }
 
-// Canvas scenes. CSS scenes are handled with plain divs.
+/* Canvas-based scene renderer with requestAnimationFrame loop.
+   Respects prefers-reduced-motion. CSS variants use plain divs. */
 function useCanvasScene(variant: FunVariant) {
   const ref = useRef<HTMLCanvasElement | null>(null);
 
@@ -295,6 +296,7 @@ function useCanvasScene(variant: FunVariant) {
       }
     };
 
+    // Balatro-inspired low-res (120×90) psychedelic gradient shader.
     const drawBalatro = () => {
       const cw = 120;
       const ch = 90;

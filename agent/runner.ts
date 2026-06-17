@@ -38,10 +38,9 @@ import { detectSkills, listSkills } from "./skills";
 import { cliAvailable, runCliTurn, gatherVaultContext } from "./gemini";
 import { retrieveContext } from "./rag";
 
+// Full vault-browsing tools when RAG is off.
 const DEFAULT_TOOLS = ["Skill", "Read", "Grep", "Glob"];
-// In RAG mode the excerpts are injected into the prompt, so file-browsing tools
-// are dropped — the agent can only run skills (e.g. humanizer). This is what
-// keeps token usage down: no autonomous Read/Grep/Glob over the whole vault.
+// RAG mode: only Skill — excerpts are in the prompt, no file browsing needed.
 const RAG_TOOLS = ["Skill"];
 
 export type Emit = (event: string, data: unknown) => void;
@@ -81,6 +80,7 @@ export function clearSession(tabId: string): void {
   void persistSessions();
 }
 
+/* Serialize a tool's input into a short UI-friendly summary string. */
 function summarizeToolInput(name: string, input: any): string {
   if (!input || typeof input !== "object") return "";
   if (name === "Read") return input.file_path ?? "";
@@ -155,9 +155,7 @@ async function runTurn(args: TurnArgs): Promise<{ text: string; sessionId?: stri
   return { text: finalText || streamed, sessionId };
 }
 
-// Retrieve relevant vault excerpts for a query and report them in the activity
-// log. Returns empty context when nothing matches (callers fall back to the
-// normal whole-vault path).
+/* Retrieve vault excerpts for a query, emit activity events, return context string. */
 async function retrieveForQuery(settings: Settings, query: string, emit: Emit): Promise<string> {
   const r = await retrieveContext(settings.vaultDir, settings.extraDirs ?? [], query);
   if (!r.context) return "";
@@ -171,20 +169,31 @@ async function retrieveForQuery(settings: Settings, query: string, emit: Emit): 
   return r.context;
 }
 
-// Resolve the user's selected skill names into prompt notes (name + description).
-// On CLI engines the Skill tool is unavailable, so any selection is skipped with
-// a notice; names that don't match an installed skill are reported and dropped.
-async function resolveSkillNotes(
+const INLINE_SKILL_MAX_CHARS = 24_000;
+
+function supportsSelectedSkills(engine: Settings["engine"]): boolean {
+  return engine === "claude" || engine === "codex";
+}
+
+async function readSkillInstructions(path: string): Promise<string> {
+  const md = await Bun.file(path).text();
+  const body = md.replace(/^---\n[\s\S]*?\n---\n?/, "").trim() || md.trim();
+  if (body.length <= INLINE_SKILL_MAX_CHARS) return body;
+  return `${body.slice(0, INLINE_SKILL_MAX_CHARS)}\n\n[skill instructions truncated to ${INLINE_SKILL_MAX_CHARS} characters]`;
+}
+
+/* Resolve selected skill names into prompt notes. Claude gets name/description
+   for the Skill tool; Codex gets SKILL.md body inline (read-only CLI path). */
+export async function resolveSkillNotes(
   settings: Settings,
   names: string[] | undefined,
-  isCliEngine: boolean,
   emit: Emit
 ): Promise<SkillNote[]> {
   const selected = names ?? [];
   if (!selected.length) return [];
-  if (isCliEngine) {
+  if (!supportsSelectedSkills(settings.engine)) {
     emit("notice", {
-      message: `Skills use the Claude-only Skill tool and are skipped on the \`${settings.engine}\` CLI engine.`,
+      message: `Skills are currently supported on Claude and Codex, and are skipped on the \`${settings.engine}\` CLI engine.`,
     });
     return [];
   }
@@ -193,8 +202,15 @@ async function resolveSkillNotes(
   const missing: string[] = [];
   for (const n of selected) {
     const info = byName.get(n);
-    if (info) notes.push({ name: info.name, description: info.description });
-    else missing.push(n);
+    if (!info) {
+      missing.push(n);
+      continue;
+    }
+    notes.push({
+      name: info.name,
+      description: info.description,
+      ...(settings.engine === "codex" ? { content: await readSkillInstructions(info.path) } : {}),
+    });
   }
   if (missing.length) {
     emit("notice", { message: `Skill${missing.length === 1 ? "" : "s"} not found and skipped: ${missing.join(", ")}.` });
@@ -202,8 +218,7 @@ async function resolveSkillNotes(
   return notes;
 }
 
-// Ensure the Skill tool is allowed when skills are selected so the agent can
-// invoke them. `undefined` keeps the default tool set (which already has Skill).
+/* Ensure Skill tool is in the allowed list when skills are selected. */
 function withSkillTool(tools: string[] | undefined, hasSkills: boolean): string[] | undefined {
   if (!hasSkills || tools === undefined) return tools;
   return tools.includes("Skill") ? tools : ["Skill", ...tools];
@@ -224,13 +239,14 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
 
   const isCliEngine = args.settings.engine !== "claude";
   const isAsk = args.mode === "ask";
-  // Selected skills apply to every mode (Claude engine only — CLI has no Skill tool).
-  const skillNotes = await resolveSkillNotes(args.settings, args.skills, isCliEngine, emit);
+  // Selected skills apply on Claude via the Skill tool and on Codex via inline
+  // SKILL.md instructions. Other CLI engines still skip them.
+  const skillNotes = await resolveSkillNotes(args.settings, args.skills, emit);
 
   let finalText = "";
   let finalSession: string | undefined;
 
-  // Ask mode retrieves on the question alone; job mode also factors in the JD.
+  // RAG query: question alone for ask, JD+question for job mode.
   const ragQuery = isAsk ? args.question : `${args.jobDescription}\n\n${args.question}`;
 
   if (isAsk) {
@@ -257,7 +273,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
       let context = ragContext;
       if (!context) context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
       finalText = await runCliTurn(args.settings.engine, {
-        prompt: buildCliAskPrompt(ASK_PERSONA, context, args.question),
+        prompt: buildCliAskPrompt(ASK_PERSONA, context, args.question, skillNotes),
         phase: "draft",
         emit,
         abort,
@@ -297,7 +313,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
     if (!context) context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
     emit("phase", { phase: "draft" });
     const draft = await runCliTurn(args.settings.engine, {
-      prompt: buildCliDraftPrompt(args.settings.persona, context, args.jobDescription, args.question),
+      prompt: buildCliDraftPrompt(args.settings.persona, context, args.jobDescription, args.question, skillNotes),
       phase: "draft",
       emit,
       abort,
@@ -309,7 +325,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
     if (args.settings.humanize && draft) {
       emit("phase", { phase: "humanize" });
       const hum = await runCliTurn(args.settings.engine, {
-        prompt: buildCliHumanizePrompt(draft),
+        prompt: buildCliHumanizePrompt(draft, skillNotes),
         phase: "humanize",
         emit,
         abort,
@@ -391,7 +407,7 @@ export async function followUp(tabId: string, args: FollowUpArgs, emit: Emit): P
   // configurable job persona. The resumed session re-receives this each turn.
   const persona = args.mode === "ask" ? ASK_PERSONA : args.settings.persona;
   const isCliEngine = args.settings.engine !== "claude";
-  const skillNotes = await resolveSkillNotes(args.settings, args.skills, isCliEngine, emit);
+  const skillNotes = await resolveSkillNotes(args.settings, args.skills, emit);
 
   let finalText = "";
   let finalSession = prev?.sessionId;
@@ -405,7 +421,7 @@ export async function followUp(tabId: string, args: FollowUpArgs, emit: Emit): P
     if (args.rag) context = await retrieveForQuery(args.settings, args.text, emit);
     if (!context) context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
     finalText = await runCliTurn(args.settings.engine, {
-      prompt: buildCliFollowupPrompt(persona, context, prev?.lastAnswer ?? "", args.text),
+      prompt: buildCliFollowupPrompt(persona, context, prev?.lastAnswer ?? "", args.text, skillNotes),
       phase: "followup",
       emit,
       abort,
@@ -459,9 +475,11 @@ export async function cleanup(tabId: string, args: CleanupArgs, emit: Emit): Pro
     return;
   }
 
+  // Cleanup: lightweight stateless pass on the current text with a cheap model.
+  // Does NOT touch the tab's real follow-up session.
   const isCliEngine = args.settings.engine !== "claude";
   const skills = await detectSkills(args.settings.vaultDir);
-  const skillNotes = await resolveSkillNotes(args.settings, args.skills, isCliEngine, emit);
+  const skillNotes = await resolveSkillNotes(args.settings, args.skills, emit);
   let cleaned = text;
 
   if (isCliEngine) {
@@ -470,7 +488,7 @@ export async function cleanup(tabId: string, args: CleanupArgs, emit: Emit): Pro
       return;
     }
     const out = await runCliTurn(args.settings.engine, {
-      prompt: buildCliCleanupPrompt(text),
+      prompt: buildCliCleanupPrompt(text, skillNotes),
       phase: "cleanup",
       emit,
       abort,
@@ -528,7 +546,7 @@ export async function summarize(tabId: string, args: SummarizeArgs, emit: Emit):
   // and passed it as `input`. We just summarize whatever text we receive.
 
   const isCliEngine = args.settings.engine !== "claude";
-  const skillNotes = await resolveSkillNotes(args.settings, args.skills, isCliEngine, emit);
+  const skillNotes = await resolveSkillNotes(args.settings, args.skills, emit);
   let context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
 
   let finalText = "";
@@ -539,7 +557,7 @@ export async function summarize(tabId: string, args: SummarizeArgs, emit: Emit):
       return;
     }
     finalText = await runCliTurn(args.settings.engine, {
-      prompt: buildSummarizePrompt(sourceText, context),
+      prompt: buildSummarizePrompt(sourceText, context, skillNotes),
       phase: "draft",
       emit,
       abort,
@@ -576,7 +594,7 @@ export async function autoPlace(tabId: string, args: AutoPlaceArgs, emit: Emit):
   emit("phase", { phase: "draft" });
 
   // Build a simple directory listing of the vault for the agent.
-  const { readdirSync, statSync } = await import("fs");
+  const { readdirSync } = await import("fs");
   const { join, relative } = await import("path");
   const SKIP = new Set([".git", ".obsidian", "node_modules", ".trash"]);
 
@@ -694,7 +712,7 @@ export async function fillinWrite(tabId: string, args: FillinWriteArgs, emit: Em
   const context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
 
   const isCliEngine = args.settings.engine !== "claude";
-  const skillNotes = await resolveSkillNotes(args.settings, args.skills, isCliEngine, emit);
+  const skillNotes = await resolveSkillNotes(args.settings, args.skills, emit);
   let finalText = "";
 
   if (isCliEngine) {
@@ -703,7 +721,7 @@ export async function fillinWrite(tabId: string, args: FillinWriteArgs, emit: Em
       return;
     }
     finalText = await runCliTurn(args.settings.engine, {
-      prompt: buildFillinAnswerPrompt(context, args.question, args.answer, args.targetPath),
+      prompt: buildFillinAnswerPrompt(context, args.question, args.answer, args.targetPath, skillNotes),
       phase: "draft",
       emit,
       abort,
@@ -741,7 +759,7 @@ export async function writeCleanup(tabId: string, args: WriteCleanupArgs, emit: 
   emit("phase", { phase: "cleanup" });
 
   const isCliEngine = args.settings.engine !== "claude";
-  const skillNotes = await resolveSkillNotes(args.settings, args.skills, isCliEngine, emit);
+  const skillNotes = await resolveSkillNotes(args.settings, args.skills, emit);
   let finalText = args.text;
 
   if (isCliEngine) {
@@ -750,7 +768,7 @@ export async function writeCleanup(tabId: string, args: WriteCleanupArgs, emit: 
       return;
     }
     const out = await runCliTurn(args.settings.engine, {
-      prompt: buildWriteCleanupPrompt(args.text),
+      prompt: buildWriteCleanupPrompt(args.text, skillNotes),
       phase: "cleanup",
       emit,
       abort,

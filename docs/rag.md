@@ -16,13 +16,24 @@ chip shows in the top bar.
 When RAG is on, before drafting the app:
 
 1. Builds (or reuses a cached) index of your vault.
-2. Scores every chunk against the job description + question.
+2. Scores every chunk against the query:
+   - **Ask mode** — the question alone.
+   - **Job mode** — job description + question combined.
 3. Injects the top handful of chunks (~12 KB budget) into the prompt as the only
    source of facts.
 
+```mermaid
+flowchart LR
+  Q["Query text"] --> IDX["BM25 index\n(agent/rag.ts)"]
+  VAULT["Vault markdown"] --> IDX
+  IDX --> TOP["Top K chunks\n≤ ~12 KB"]
+  TOP --> PROMPT["Injected into prompt"]
+  PROMPT --> MODEL["Claude or CLI engine"]
+```
+
 For the **Claude** engine, RAG also disables the `Read`/`Grep`/`Glob` tools for
 that run, so the agent can't wander the vault — it answers from the injected
-excerpts. For the **Gemini** engine, the retrieved excerpts replace the usual
+excerpts. For **CLI engines**, the retrieved excerpts replace the usual
 whole-vault dump.
 
 The retrieved excerpts show up in the tab's **Context activity** log, so you can
@@ -48,11 +59,14 @@ API keys, no model downloads, nothing to install.
 - **Leave it off** when you want the agent to explore freely, or for questions
   whose relevant facts are spread thin and hard to match by keyword.
 
+Write mode does not use the RAG toggle — it gathers vault context directly for
+summarize, auto-place, and fill-in operations.
+
 ## Graceful fallback
 
 If retrieval finds nothing for a query (e.g. an empty vault or a question with no
 matching terms), RAG steps aside: Claude falls back to reading the vault and
-Gemini falls back to the whole-vault dump, with a notice in the UI.
+CLI engines fall back to the whole-vault dump, with a notice in the UI.
 
 ## Tuning
 

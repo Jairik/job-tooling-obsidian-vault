@@ -14,8 +14,7 @@ interface Props {
   onRename: (id: string, name: string) => void;
 }
 
-// Map a tab's generation phase to its status-dot class. Phases not listed here
-// (e.g. idle) leave the dot tinted with the tab's solid accent color instead.
+/* Phase → status-dot CSS class. Unlisted phases use the tab's accent color. */
 const PHASE_DOT: Record<string, string> = {
   draft: "dot-running",
   humanize: "dot-running",
