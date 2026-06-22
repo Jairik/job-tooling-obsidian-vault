@@ -1,29 +1,30 @@
 // Configuration: defaults, model list, reasoning map, persona/system-prompt
 // builder, and persistence of global config to config.json.
 import { join } from "path";
+import {
+  DEFAULT_CLAUDE_MODEL,
+  DEFAULT_CLEANUP_MODEL,
+  defaultEngineModels,
+  defaultEngineReasoning,
+  effectiveEngineModel,
+  effectiveEngineReasoning,
+  mergeEngineSettings,
+  normalizeEngineSettings,
+  toEffort,
+  type CoreSettings,
+  type Effort,
+  type EngineModels,
+  type EngineReasoning,
+  type TabMode,
+} from "../shared/settings";
 
 export const DEFAULT_VAULT = process.env.VAULT_DIR || "/home/jj/repos/obsidian-vault";
-
-export const DEFAULT_MODEL = "claude-sonnet-4-6";
-
-// Lightweight model used by the "Clean up" action (grammar fix + humanizer).
-export const DEFAULT_CLEANUP_MODEL = "claude-haiku-4-5";
 
 export const MODELS = [
   { id: "claude-sonnet-4-6", label: "Sonnet 4.6 (default)" },
   { id: "claude-opus-4-8", label: "Opus 4.8" },
   { id: "claude-haiku-4-5", label: "Haiku 4.5" },
 ];
-
-export type Effort = "low" | "medium" | "high";
-
-export type Engine = "claude" | "gemini" | "opencode" | "cursor" | "copilot" | "codex";
-export type EngineModels = Partial<Record<Engine, string>>;
-export type EngineReasoning = Partial<Record<Engine, string>>;
-
-// A tab is either a general "ask the vault" conversation (default), the
-// job-application workflow, or a vault writer.
-export type TabMode = "ask" | "job" | "write";
 
 export const ENGINES = [
   { id: "claude", label: "Claude Code (default)" },
@@ -35,51 +36,15 @@ export const ENGINES = [
 ];
 
 // "medium reasoning" maps to a medium thinking budget.
-export const REASONING: Record<Effort, number> = {
+const REASONING: Record<Effort, number> = {
   low: 2000,
   medium: 8000,
   high: 16000,
 };
 
-export interface Settings {
-  engine: Engine;
-  model: string;
-  cleanupModel: string;
-  effort: Effort;
-  engineModels: EngineModels;
-  engineReasoning: EngineReasoning;
-  humanize: boolean;
-  rag: boolean;
-  maxTurns: number;
-  persona: string;
-  vaultDir: string;
-  extraDirs: string[];
-  urlFetchMethod?: string;
-}
+export type ServerSettings = CoreSettings;
 
-export function defaultEngineModels(): Record<Engine, string> {
-  return {
-    claude: DEFAULT_MODEL,
-    gemini: "",
-    opencode: "",
-    cursor: "",
-    copilot: "",
-    codex: "",
-  };
-}
-
-export function defaultEngineReasoning(): Record<Engine, string> {
-  return {
-    claude: "medium",
-    gemini: "",
-    opencode: "",
-    cursor: "",
-    copilot: "",
-    codex: "",
-  };
-}
-
-export const DEFAULT_PERSONA = `You are writing a job-application answer on behalf of JJ McCauley, a software engineer. You are not a generic assistant: you produce the exact answer text JJ would submit, written in the first person ("I").
+const DEFAULT_PERSONA = `You are writing a job-application answer on behalf of JJ McCauley, a software engineer. You are not a generic assistant: you produce the exact answer text JJ would submit, written in the first person ("I").
 
 GROUNDING
 - The working directory is JJ's personal knowledge vault. Before answering, read whatever you need to ground the answer in real facts:
@@ -106,10 +71,11 @@ OUTPUT
 - Output ONLY the answer: no preamble, no "I hope this helps", no meta commentary, and no notes about which files you read.
 - Use whatever length and structure (prose, short lists) best fits the question.`;
 
-export function defaultSettings(vaultDir = DEFAULT_VAULT): Settings {
+/* Creates the complete, safe configuration used when no config file exists. */
+export function defaultSettings(vaultDir = DEFAULT_VAULT): ServerSettings {
   return {
     engine: "claude",
-    model: DEFAULT_MODEL,
+    model: DEFAULT_CLAUDE_MODEL,
     cleanupModel: DEFAULT_CLEANUP_MODEL,
     effort: "medium",
     engineModels: defaultEngineModels(),
@@ -123,62 +89,29 @@ export function defaultSettings(vaultDir = DEFAULT_VAULT): Settings {
   };
 }
 
-function asEffort(value: unknown): Effort | undefined {
-  return value === "low" || value === "medium" || value === "high" ? value : undefined;
-}
-
-export function normalizeSettings(saved: Partial<Settings> = {}, vaultDir = DEFAULT_VAULT): Settings {
+/* Validates persisted settings, filling omissions and upgrading legacy fields. */
+export function normalizeServerSettings(saved: Partial<ServerSettings> = {}, vaultDir = DEFAULT_VAULT): ServerSettings {
   const base = defaultSettings(vaultDir);
-  const raw = saved as Partial<Settings> & {
-    engineModels?: EngineModels;
-    engineReasoning?: EngineReasoning;
-  };
-  const engineModels = { ...base.engineModels, ...(raw.engineModels ?? {}) };
-  const engineReasoning = { ...base.engineReasoning, ...(raw.engineReasoning ?? {}) };
-
-  if (typeof raw.model === "string" && raw.model.trim()) engineModels.claude = raw.model;
-  if (typeof raw.effort === "string" && raw.effort.trim()) engineReasoning.claude = raw.effort;
-
-  const claudeEffort = asEffort(engineReasoning.claude) ?? asEffort(raw.effort) ?? base.effort;
+  const raw = saved as Partial<ServerSettings> & { engineModels?: EngineModels; engineReasoning?: EngineReasoning };
+  const engineSettings = normalizeEngineSettings(raw);
 
   return {
     ...base,
     ...saved,
-    engineModels,
-    engineReasoning,
-    model: engineModels.claude || raw.model || DEFAULT_MODEL,
-    effort: claudeEffort,
+    ...engineSettings,
     vaultDir: raw.vaultDir || vaultDir,
     extraDirs: Array.isArray(raw.extraDirs) ? raw.extraDirs : [],
   };
 }
 
-export function mergeSettings(base: Settings, patch: Partial<Settings> | undefined): Settings {
-  if (!patch) return normalizeSettings(base, base.vaultDir || DEFAULT_VAULT);
-  return normalizeSettings(
-    {
-      ...base,
-      ...patch,
-      engineModels: { ...(base.engineModels ?? {}), ...(patch.engineModels ?? {}) },
-      engineReasoning: { ...(base.engineReasoning ?? {}), ...(patch.engineReasoning ?? {}) },
-    },
-    patch.vaultDir || base.vaultDir || DEFAULT_VAULT
-  );
+/* Applies one partial settings update, then normalizes the resulting full configuration. */
+export function mergeServerSettings(base: ServerSettings, patch: Partial<ServerSettings> | undefined): ServerSettings {
+  const merged = patch ? mergeEngineSettings(base, patch) : base;
+  return normalizeServerSettings(merged, patch?.vaultDir || base.vaultDir || DEFAULT_VAULT);
 }
 
-export function effectiveEngineModel(settings: Settings, engine: Engine = settings.engine): string {
-  const configured = settings.engineModels?.[engine]?.trim();
-  if (configured) return configured;
-  return engine === "claude" ? settings.model || DEFAULT_MODEL : "";
-}
-
-export function effectiveEngineReasoning(settings: Settings, engine: Engine = settings.engine): string {
-  const configured = settings.engineReasoning?.[engine]?.trim();
-  if (configured) return configured;
-  return engine === "claude" ? settings.effort || "medium" : "";
-}
-
-export function claudeReasoningTokens(settings: Settings): number {
+/* Converts a Claude reasoning label or numeric override into its SDK token budget. */
+export function claudeReasoningTokens(settings: ServerSettings): number {
   const raw = effectiveEngineReasoning(settings, "claude").toLowerCase();
   if (/^\d+$/.test(raw)) return Math.max(1_000, Math.min(64_000, Number(raw)));
   const effort =
@@ -186,7 +119,7 @@ export function claudeReasoningTokens(settings: Settings): number {
       ? "low"
       : raw === "xhigh" || raw === "max"
         ? "high"
-        : asEffort(raw);
+        : toEffort(raw);
   return REASONING[effort ?? settings.effort] ?? REASONING.medium;
 }
 
@@ -200,6 +133,7 @@ export interface SkillNote {
 
 // Render the SKILLS section of the system-prompt append from the user's selected
 // skills. Returns "" when nothing is selected.
+/* Renders selected skills as an instruction block for the model's system prompt. */
 export function buildSkillsNote(skills: SkillNote[] | undefined): string {
   if (!skills?.length) return "";
   const lines = skills.map((s) => `  - ${s.name}: ${s.description || "(no description)"}`);
@@ -217,6 +151,7 @@ interface BuildArgs {
 // Compose the system-prompt append from the base persona plus phase/mode notes.
 // Ask mode is a single grounded answer turn: it skips the humanize note (that
 // belongs to the job-application pipeline). Selected skills apply to every mode.
+/* Builds the mode- and phase-specific system-prompt suffix for a model turn. */
 export function buildAppend({ persona, mode, skills, useRag, phase }: BuildArgs): string {
   const isAsk = mode === "ask";
   const parts = [persona.trim()];
@@ -248,6 +183,7 @@ export function buildAppend({ persona, mode, skills, useRag, phase }: BuildArgs)
 }
 
 // ---- Ask mode prompts (general vault Q&A) ----
+/* Formats a direct question for general vault-grounded answer mode. */
 export function buildAskPrompt(question: string): string {
   return `Question:
 """
@@ -258,14 +194,17 @@ Answer the question above, grounded in the vault.`;
 }
 
 // RAG ask prompt (Claude engine): retrieved excerpts are the only facts available.
+/* Formats an ask prompt whose facts are limited to retrieved excerpts. */
 export function buildRagAskPrompt(context: string, question: string): string {
   return `${contextBlock(context)}\n\n${buildAskPrompt(question)}\n\nGround your answer ONLY in the vault excerpts above. Do not read or search additional files.`;
 }
 
+/* Formats the self-contained ask prompt used by sandboxed external CLIs. */
 export function buildCliAskPrompt(persona: string, context: string, question: string): string {
   return `${persona.trim()}\n\n${contextBlock(context)}\n\n${buildAskPrompt(question)}\n\n${NO_TOOLS}`;
 }
 
+/* Formats the job description and question used to draft an application answer. */
 export function buildDraftPrompt(jobDescription: string, question: string): string {
   return `Job description:
 """
@@ -282,12 +221,14 @@ Write JJ's answer to the question above, grounded in the vault.`;
 
 // RAG draft prompt (Claude engine): the retrieved excerpts are the only facts
 // available, so they go straight into the prompt and file-reading is disabled.
+/* Formats a draft prompt whose claims must come only from RAG excerpts. */
 export function buildRagDraftPrompt(context: string, jobDescription: string, question: string): string {
   return `${contextBlock(context)}\n\n${buildDraftPrompt(jobDescription, question)}\n\nGround your answer ONLY in the vault excerpts above. Do not read or search additional files.`;
 }
 
 // RAG follow-up prompt (Claude engine): refresh the excerpts for the new tweak
 // so revisions stay grounded without re-enabling file browsing.
+/* Formats a revision request while retaining the RAG-only fact boundary. */
 export function buildRagFollowupPrompt(context: string, tweak: string): string {
   return `${contextBlock(context)}\n\n${tweak.trim()}\n\nApply the change using ONLY the vault excerpts above (plus the answer you already wrote). Do not read or search additional files.`;
 }
@@ -296,7 +237,7 @@ export function buildRagFollowupPrompt(context: string, tweak: string): string {
 // agy has no separate system prompt and no Skill tool, so instructions are folded
 // into the prompt and humanization is done with inline rules instead of a skill.
 
-export const HUMANIZE_INLINE = `Rewrite the answer below to remove all signs of AI writing, while preserving every fact and keeping the first-person voice.
+const HUMANIZE_INLINE = `Rewrite the answer below to remove all signs of AI writing, while preserving every fact and keeping the first-person voice.
 - Remove every em dash and en dash. Use periods, commas, or parentheses instead.
 - Cut AI-vocab words (delve, tapestry, testament, underscore, pivotal, vibrant, crucial, leverage, foster, robust, seamless, intricate, showcase).
 - Prefer plain "is/are/has" over "serves as / stands as / boasts".
@@ -305,12 +246,14 @@ export const HUMANIZE_INLINE = `Rewrite the answer below to remove all signs of 
 - Keep it concrete and specific.
 Output ONLY the rewritten answer.`;
 
-export const NO_TOOLS = `Do not use any tools, do not run any shell commands, and do not read or write any files. Use ONLY the VAULT CONTEXT provided above as your source of facts.`;
+const NO_TOOLS = `Do not use any tools, do not run any shell commands, and do not read or write any files. Use ONLY the VAULT CONTEXT provided above as your source of facts.`;
 
-export function contextBlock(context: string): string {
+/* Wraps retrieved vault text in a clearly delimited prompt section. */
+function contextBlock(context: string): string {
   return `VAULT CONTEXT (read-only — your only source of facts):\n"""\n${context.trim() || "(none provided)"}\n"""`;
 }
 
+/* Creates the complete draft instruction for an external CLI without vault access. */
 export function buildCliDraftPrompt(
   persona: string,
   context: string,
@@ -320,6 +263,7 @@ export function buildCliDraftPrompt(
   return `${persona.trim()}\n\n${contextBlock(context)}\n\n${buildDraftPrompt(jobDescription, question)}\n\n${NO_TOOLS}`;
 }
 
+/* Creates the final-style pass prompt for external CLI engines. */
 export function buildCliHumanizePrompt(draft: string): string {
   return `${HUMANIZE_INLINE}\n\nAnswer to rewrite:\n"""\n${draft.trim()}\n"""\n\nDo not use any tools or run any commands; just return the rewritten answer.`;
 }
@@ -332,6 +276,7 @@ const CLEANUP_GRAMMAR = `Fix any spelling, grammar, punctuation, and awkward phr
 
 // Claude engine: when the humanizer skill is installed we run it; otherwise we
 // fold the inline humanize rules into the prompt (a missing skill does nothing).
+/* Requests a light editing pass while optionally using the humanizer skill. */
 export function buildCleanupPrompt(text: string, useSkill: boolean): string {
   const polish = useSkill
     ? `Then apply the humanizer skill to remove any signs of AI writing.`
@@ -339,6 +284,7 @@ export function buildCleanupPrompt(text: string, useSkill: boolean): string {
   return `${CLEANUP_GRAMMAR}\n\n${polish}\n\nText to clean up:\n"""\n${text.trim()}\n"""\n\nReturn ONLY the cleaned text — no commentary, no notes, no headings.`;
 }
 
+/* Builds the companion system instruction for the cleanup phase. */
 export function buildCleanupAppend(useSkill: boolean): string {
   return useSkill
     ? `CLEANUP PASS\n- Fix grammar and writing in the provided text, then use the humanizer skill on it. Return ONLY the final cleaned text: no drafts, no audit notes, no commentary.`
@@ -346,10 +292,12 @@ export function buildCleanupAppend(useSkill: boolean): string {
 }
 
 // Gemini engine has no Skill tool, so cleanup always uses the inline rules.
+/* Builds the self-contained cleanup prompt sent to external CLIs. */
 export function buildCliCleanupPrompt(text: string): string {
   return `${CLEANUP_GRAMMAR}\n${HUMANIZE_INLINE}\n\nText to clean up:\n"""\n${text.trim()}\n"""\n\nDo not use any tools or run any commands; return ONLY the cleaned text.`;
 }
 
+/* Includes the existing answer and requested change for a sandboxed CLI revision. */
 export function buildCliFollowupPrompt(
   persona: string,
   context: string,
@@ -374,6 +322,7 @@ ${NO_TOOLS}`;
 
 // ---- Vault Writer prompts ----
 
+/* Directs the writer workflow to summarize imported text using vault context. */
 export function buildSummarizePrompt(text: string, vaultContext: string): string {
   return `You are summarizing content for a personal knowledge vault.
 
@@ -389,6 +338,7 @@ Produce a clear, well-structured markdown summary of the content above. Use head
 ${NO_TOOLS}`;
 }
 
+/* Asks the writer workflow to select the most appropriate destination path. */
 export function buildAutoPlacePrompt(content: string, vaultStructure: string): string {
   return `You are analyzing a personal knowledge vault to determine the best location for new content.
 
@@ -409,6 +359,7 @@ Respond with ONLY the file path, nothing else. Example: JJ-master/Projects/new-p
 ${NO_TOOLS}`;
 }
 
+/* Finds unanswered prompts in the vault and returns structured questions to fill. */
 export function buildFillinScanPrompt(vaultContext: string, prompt?: string): string {
   const focus = prompt ? `\nThe user wants to focus on: ${prompt.trim()}` : '';
   return `You are analyzing a personal knowledge vault to find gaps and missing information.${focus}
@@ -425,6 +376,7 @@ Output ONLY the JSON array, no commentary or markdown fencing.
 ${NO_TOOLS}`;
 }
 
+/* Prepares an answer that can be inserted into a specific vault file and question. */
 export function buildFillinAnswerPrompt(vaultContext: string, question: string, answer: string, targetPath: string): string {
   return `You are formatting a user's answer into a well-structured vault entry.
 
@@ -441,6 +393,7 @@ Output ONLY the formatted markdown content — no commentary, no file path, no f
 ${NO_TOOLS}`;
 }
 
+/* Applies the writer workflow's formatting and clarity cleanup before saving. */
 export function buildWriteCleanupPrompt(text: string): string {
   return `Clean up and format the following text into well-structured markdown for a personal knowledge vault.
 
@@ -459,17 +412,19 @@ ${NO_TOOLS}`;
 // ---- Global config persistence ----
 const CONFIG_PATH = join(import.meta.dir, "..", "config.json");
 
-export async function loadConfig(): Promise<Settings> {
+/* Loads config.json when available, otherwise returns normalized defaults. */
+export async function loadConfig(): Promise<ServerSettings> {
   try {
     const saved = JSON.parse(await Bun.file(CONFIG_PATH).text());
-    return normalizeSettings(saved);
+    return normalizeServerSettings(saved);
   } catch {
     return defaultSettings();
   }
 }
 
-export async function saveConfig(patch: Partial<Settings>): Promise<Settings> {
-  const next = mergeSettings(await loadConfig(), patch);
+/* Persists a partial settings update and returns the canonical saved configuration. */
+export async function saveConfig(patch: Partial<ServerSettings>): Promise<ServerSettings> {
+  const next = mergeServerSettings(await loadConfig(), patch);
   await Bun.write(CONFIG_PATH, JSON.stringify(next, null, 2));
   return next;
 }

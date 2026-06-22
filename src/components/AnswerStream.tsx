@@ -26,6 +26,7 @@ interface Props {
   onRegenerate: () => void;
 }
 
+/* Shows streamed model text, editable final output, errors, and answer actions. */
 export function AnswerStream({ phase, mode, draft, answer, notice, error, onEditAnswer, onCleanup, onRegenerate }: Props) {
   const [showDraft, setShowDraft] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -34,6 +35,7 @@ export function AnswerStream({ phase, mode, draft, answer, notice, error, onEdit
   const display = phase === "draft" ? draft : answer || draft;
   const hasContent = Boolean(answer || draft);
 
+  /* Copies the final answer and briefly confirms the action in the button label. */
   const copy = async () => {
     await navigator.clipboard.writeText(answer || draft);
     setCopied(true);

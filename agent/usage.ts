@@ -7,33 +7,19 @@
 // uniform usage endpoint, so the UI offers this button for Claude only.
 import { homedir } from "os";
 import { join } from "path";
+import type { UsageResult, UsageWindow } from "../shared/usage";
 
 const CREDENTIALS_PATH = join(homedir(), ".claude", ".credentials.json");
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 // Beta header Claude Code sends on its OAuth API calls.
 const OAUTH_BETA = "oauth-2025-04-20";
 
-// A single rolling limit window: how much of it is used (0–100) and when it resets.
-export interface UsageWindow {
-  utilization: number;
-  resetsAt: string | null;
-}
-
-export interface UsageResult {
-  ok: boolean;
-  error?: string;
-  fiveHour?: UsageWindow;
-  sevenDay?: UsageWindow;
-  // Present only on plans with a separate Opus weekly limit (e.g. Max).
-  sevenDayOpus?: UsageWindow;
-  extraUsage?: { enabled: boolean; utilization: number | null };
-}
-
 interface OAuthCreds {
   accessToken: string;
   expiresAt?: number;
 }
 
+/* Loads the local OAuth token without treating a missing Claude login as an error. */
 async function readCredentials(): Promise<OAuthCreds | null> {
   try {
     const raw = JSON.parse(await Bun.file(CREDENTIALS_PATH).text());
@@ -45,6 +31,7 @@ async function readCredentials(): Promise<OAuthCreds | null> {
   }
 }
 
+/* Narrows an untrusted quota object into the stable usage-window contract. */
 function toWindow(w: unknown): UsageWindow | undefined {
   if (!w || typeof w !== "object") return undefined;
   const obj = w as { utilization?: unknown; resets_at?: unknown };
@@ -52,6 +39,7 @@ function toWindow(w: unknown): UsageWindow | undefined {
   return { utilization: obj.utilization, resetsAt: typeof obj.resets_at === "string" ? obj.resets_at : null };
 }
 
+/* Fetches and normalizes Claude subscription usage for the status panel. */
 export async function fetchClaudeUsage(): Promise<UsageResult> {
   const creds = await readCredentials();
   if (!creds) {

@@ -1,13 +1,16 @@
 // Client-side types + localStorage persistence for tabs and global settings.
+import {
+  DEFAULT_CLEANUP_MODEL,
+  mergeEngineSettings,
+  normalizeEngineSettings,
+  type CoreSettings,
+  type Engine,
+  type TabMode,
+  type UrlFetchMethod,
+} from "../../shared/settings";
+import type { FunVariant } from "../../shared/design";
 
-export type Effort = "low" | "medium" | "high";
-export type Engine = "claude" | "gemini" | "opencode" | "cursor" | "copilot" | "codex";
-export type EngineModels = Partial<Record<Engine, string>>;
-export type EngineReasoning = Partial<Record<Engine, string>>;
-
-// A tab is either a general "ask the vault" conversation (default), the
-// job-application workflow, or a vault writer.
-export type TabMode = "ask" | "job" | "write";
+export type { Engine, TabMode, UrlFetchMethod } from "../../shared/settings";
 
 // Vault Writer sub-modes.
 export type WriteMode = "summarize" | "manual" | "fillin";
@@ -50,8 +53,6 @@ export type BorderRadius = "sharp" | "rounded" | "pill" | "circle";
 export type SpacingScale = "compact" | "comfortable" | "spacious";
 export type ShadowIntensity = "none" | "subtle" | "medium" | "strong";
 
-export type FunVariant = "aurora" | "particles" | "waves" | "dots" | "mesh" | "matrix" | "starfield" | "grid3d" | "flicker" | "comet" | "balatro";
-
 export interface DesignSettings {
   funEnabled: boolean;
   funVariant: FunVariant;
@@ -78,68 +79,19 @@ export const DEFAULT_DESIGN: DesignSettings = {
   toolbarDropdown: false,
 };
 
-export type UrlFetchMethod = "basic";
-
-export interface Settings {
-  engine: Engine;
-  model: string;
-  cleanupModel: string;
-  effort: Effort;
-  engineModels: EngineModels;
-  engineReasoning: EngineReasoning;
-  humanize: boolean;
-  rag: boolean;
-  maxTurns: number;
-  persona: string;
-  vaultDir: string;
-  extraDirs: string[];
+export interface Settings extends CoreSettings {
   design: DesignSettings;
   urlFetchMethod: UrlFetchMethod;
 }
 
-export const DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6";
-
-export function defaultEngineModels(): Record<Engine, string> {
-  return {
-    claude: DEFAULT_CLAUDE_MODEL,
-    gemini: "",
-    opencode: "",
-    cursor: "",
-    copilot: "",
-    codex: "",
-  };
-}
-
-export function defaultEngineReasoning(): Record<Engine, string> {
-  return {
-    claude: "medium",
-    gemini: "",
-    opencode: "",
-    cursor: "",
-    copilot: "",
-    codex: "",
-  };
-}
-
-function asEffort(value: unknown): Effort | undefined {
-  return value === "low" || value === "medium" || value === "high" ? value : undefined;
-}
-
+/* Converts possibly old or incomplete browser settings into a full valid object. */
 export function normalizeSettings(raw: Partial<Settings>): Settings {
-  const engineModels = { ...defaultEngineModels(), ...(raw.engineModels ?? {}) };
-  const engineReasoning = { ...defaultEngineReasoning(), ...(raw.engineReasoning ?? {}) };
-  if (typeof raw.model === "string" && raw.model.trim()) engineModels.claude = raw.model;
-  if (typeof raw.effort === "string" && raw.effort.trim()) engineReasoning.claude = raw.effort;
-
-  const claudeEffort = asEffort(engineReasoning.claude) ?? asEffort(raw.effort) ?? "medium";
+  const engineSettings = normalizeEngineSettings(raw);
 
   return {
     engine: raw.engine ?? "claude",
-    model: engineModels.claude || raw.model || DEFAULT_CLAUDE_MODEL,
-    cleanupModel: raw.cleanupModel ?? "claude-haiku-4-5",
-    effort: claudeEffort,
-    engineModels,
-    engineReasoning,
+    cleanupModel: raw.cleanupModel ?? DEFAULT_CLEANUP_MODEL,
+    ...engineSettings,
     humanize: raw.humanize ?? true,
     rag: raw.rag ?? false,
     maxTurns: raw.maxTurns ?? 24,
@@ -151,25 +103,9 @@ export function normalizeSettings(raw: Partial<Settings>): Settings {
   };
 }
 
+/* Merges a settings patch without replacing per-engine nested preferences. */
 export function mergeSettings(base: Settings, patch: Partial<Settings>): Settings {
-  return normalizeSettings({
-    ...base,
-    ...patch,
-    engineModels: { ...(base.engineModels ?? {}), ...(patch.engineModels ?? {}) },
-    engineReasoning: { ...(base.engineReasoning ?? {}), ...(patch.engineReasoning ?? {}) },
-  });
-}
-
-export function effectiveEngineModel(settings: Settings, engine: Engine = settings.engine): string {
-  const configured = settings.engineModels?.[engine]?.trim();
-  if (configured) return configured;
-  return engine === "claude" ? settings.model || DEFAULT_CLAUDE_MODEL : "";
-}
-
-export function effectiveEngineReasoning(settings: Settings, engine: Engine = settings.engine): string {
-  const configured = settings.engineReasoning?.[engine]?.trim();
-  if (configured) return configured;
-  return engine === "claude" ? settings.effort || "medium" : "";
+  return normalizeSettings(mergeEngineSettings(base, patch));
 }
 
 export type Phase = "idle" | "draft" | "humanize" | "cleanup" | "followup" | "done" | "error";
@@ -238,15 +174,18 @@ const NOUNS = [
   "Maple", "Summit", "Beacon", "Drift", "Compass", "Meridian", "Anchor", "Cipher",
 ];
 
+/* Selects one array item uniformly for generated tab metadata. */
 function pick<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
+/* Builds a memorable default name from the adjective and noun word lists. */
 function codename(): string {
   return `${pick(ADJECTIVES)} ${pick(NOUNS)}`;
 }
 
 // Choose the least-used palette color so new tabs stay visually distinct.
+/* Chooses the least-used tab color to make concurrent tabs easy to distinguish. */
 function pickColor(existing: Tab[]): string {
   const counts = new Map<string, number>(PALETTE.map((c) => [c, 0]));
   for (const t of existing) counts.set(t.color, (counts.get(t.color) ?? 0) + 1);
@@ -267,6 +206,7 @@ const FILLERS = /^(please\s+|can you\s+|could you\s+|in (a|one)[^,]*,\s*|tell us
 const COMPANY_STOP = new Set(["we", "the", "our", "you", "your", "this", "that", "a", "an", "i", "it", "they"]);
 
 // Pull a likely company name out of the job description, fully offline.
+/* Attempts to extract a company name for a more descriptive local tab title. */
 function extractCompany(jobDescription: string): string {
   const text = jobDescription.replace(/\s+/g, " ").trim();
   if (!text) return "";
@@ -289,6 +229,7 @@ function extractCompany(jobDescription: string): string {
 
 // Instant, offline title from the tab's content: company name if we can find one,
 // otherwise a short slug of the question (or the JD's first line).
+/* Derives a short title locally before model output is available. */
 export function deriveTitleLocal(jobDescription: string, question: string): string {
   const company = extractCompany(jobDescription);
   if (company) return company;
@@ -308,10 +249,12 @@ const TABS_KEY = "jt.tabs.v1";
 const SETTINGS_KEY = "jt.settings.v1";
 const DESIGN_KEY = "jt.design.v1";
 
+/* Generates a compact client-side identifier for tabs and quick-note records. */
 export function uid(): string {
   return crypto.randomUUID();
 }
 
+/* Creates a new tab with independent state and a balanced color assignment. */
 export function newTab(existing: Tab[] = [], ragDefault = false, mode: TabMode = "ask"): Tab {
   return {
     id: uid(),
@@ -343,6 +286,7 @@ export function newTab(existing: Tab[] = [], ragDefault = false, mode: TabMode =
 // A new conversation that reuses an existing tab's context (job description +
 // RAG/YC/override settings) but starts fresh: new id → new server session, blank
 // question, empty answer/messages, its own color and auto-name.
+/* Copies the job context into a clean tab for another related question. */
 export function cloneTabForNewQuestion(source: Tab, existing: Tab[]): Tab {
   const base = newTab(existing, source.rag, source.mode);
   return {
@@ -361,11 +305,13 @@ export function cloneTabForNewQuestion(source: Tab, existing: Tab[]): Tab {
 // never the system prompt, so a tab — or one cloned via "+ New question" — must
 // follow the currently specified system prompt rather than a persona snapshot that
 // was frozen when Override was first toggled on (and has since gone stale).
+/* Returns an override payload only when the tab intentionally differs from global settings. */
 export function overrideSettingsBody(tab: Tab, global: Settings): Settings | undefined {
   if (!tab.overrideEnabled || !tab.override) return undefined;
   return { ...tab.override, persona: global.persona };
 }
 
+/* Restores tabs from localStorage and repairs data written by earlier app versions. */
 export function loadTabs(): Tab[] {
   try {
     const raw = localStorage.getItem(TABS_KEY);
@@ -402,6 +348,7 @@ export function loadTabs(): Tab[] {
   return [newTab()];
 }
 
+/* Persists the complete tab list for the next browser session. */
 export function saveTabs(tabs: Tab[]): void {
   try {
     localStorage.setItem(TABS_KEY, JSON.stringify(tabs));
@@ -410,6 +357,7 @@ export function saveTabs(tabs: Tab[]): void {
   }
 }
 
+/* Reads browser settings; callers use server defaults if none have been saved. */
 export function loadSettings(): Settings | null {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
@@ -419,6 +367,7 @@ export function loadSettings(): Settings | null {
   }
 }
 
+/* Persists the client settings cache after a user preference changes. */
 export function saveSettings(s: Settings): void {
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
@@ -427,6 +376,7 @@ export function saveSettings(s: Settings): void {
   }
 }
 
+/* Restores visual preferences while preserving defaults for newly introduced options. */
 export function loadDesignSettings(): DesignSettings {
   try {
     const raw = localStorage.getItem(DESIGN_KEY);
@@ -440,6 +390,7 @@ export function loadDesignSettings(): DesignSettings {
   return DEFAULT_DESIGN;
 }
 
+/* Persists presentation-only settings separately from model configuration. */
 export function saveDesignSettings(d: DesignSettings): void {
   try {
     localStorage.setItem(DESIGN_KEY, JSON.stringify(d));
@@ -483,7 +434,8 @@ export interface QuickNotes {
 const QUICKNOTES_KEY = "jt.quicknotes.v1";
 
 // References are a fixed set of three slots, numbered 1–3.
-export function defaultReferences(): Reference[] {
+/* Provides the initial contact references shown in Quick Notes. */
+function defaultReferences(): Reference[] {
   return [
     { id: uid(), name: "", email: "", phone: "" },
     { id: uid(), name: "", email: "", phone: "" },
@@ -491,7 +443,8 @@ export function defaultReferences(): Reference[] {
   ];
 }
 
-export function defaultQuickNotes(): QuickNotes {
+/* Builds the first-run data model for the Quick Notes drawer. */
+function defaultQuickNotes(): QuickNotes {
   return {
     links: [
       { id: uid(), icon: "github", label: "GitHub", value: "" },
@@ -504,6 +457,7 @@ export function defaultQuickNotes(): QuickNotes {
   };
 }
 
+/* Restores Quick Notes and backfills any collections absent in older saved data. */
 export function loadQuickNotes(): QuickNotes {
   try {
     const raw = localStorage.getItem(QUICKNOTES_KEY);
@@ -522,6 +476,7 @@ export function loadQuickNotes(): QuickNotes {
   return defaultQuickNotes();
 }
 
+/* Persists the editable Quick Notes workspace in localStorage. */
 export function saveQuickNotes(qn: QuickNotes): void {
   try {
     localStorage.setItem(QUICKNOTES_KEY, JSON.stringify(qn));
@@ -554,6 +509,7 @@ export interface LogEntry {
 const LOGS_KEY = "jt.logs.v1";
 export const LOG_CAP = 300;
 
+/* Reads the browser's activity-log cache, treating malformed storage as empty. */
 export function loadLogs(): LogEntry[] {
   try {
     const raw = localStorage.getItem(LOGS_KEY);
@@ -567,6 +523,7 @@ export function loadLogs(): LogEntry[] {
   return [];
 }
 
+/* Saves the bounded activity-log cache for immediate UI hydration. */
 export function saveLogs(logs: LogEntry[]): void {
   try {
     localStorage.setItem(LOGS_KEY, JSON.stringify(logs));
@@ -575,6 +532,7 @@ export function saveLogs(logs: LogEntry[]): void {
   }
 }
 
+/* Removes the browser copy of the activity log. */
 export function clearLogs(): void {
   try {
     localStorage.removeItem(LOGS_KEY);
@@ -585,6 +543,7 @@ export function clearLogs(): void {
 
 // Merge two log lists (e.g. the localStorage cache and the durable server copy),
 // de-duplicating by id, ordering oldest→newest, and keeping the most recent cap.
+/* Combines local and server logs by id, retaining the most recent bounded set. */
 export function mergeLogs(a: LogEntry[], b: LogEntry[]): LogEntry[] {
   const byId = new Map<string, LogEntry>();
   for (const e of [...a, ...b]) {

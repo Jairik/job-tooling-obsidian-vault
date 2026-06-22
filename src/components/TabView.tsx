@@ -4,7 +4,7 @@
 // inputs are replaced by the VaultWriter. Settings can be overridden per tab.
 import { useState } from "react";
 import type { Settings, Tab, SkillInfo } from "../lib/store";
-import { effectiveEngineModel, effectiveEngineReasoning } from "../lib/store";
+import { effectiveEngineModel, effectiveEngineReasoning } from "../../shared/settings";
 import type { ModelOption } from "../lib/api";
 import { AnswerStream } from "./AnswerStream";
 import { ActivityLog } from "./ActivityLog";
@@ -34,6 +34,7 @@ interface Props {
   onConfirmWrite: () => void;
 }
 
+/* Displays one tab's mode-specific editor, controls, streamed result, and activity. */
 export function TabView({ tab, globalSettings, models, engines, skills, availableSkills, onPatch, onGenerate, onFollowUp, onCleanup, onNewQuestion, onCancel, onSummarize, onAutoPlace, onFillinScan, onFillinWrite, onConfirmFillinWrite, onWriteCleanup, onConfirmWrite }: Props) {
   const [followText, setFollowText] = useState("");
   const running =

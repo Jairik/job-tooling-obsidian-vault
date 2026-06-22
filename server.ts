@@ -1,12 +1,11 @@
-// Bun full-stack server: serves the React app (src/index.html) and a small
-// JSON + SSE API that drives Claude Code instances per tab.
+/* Bun server that serves the React app and its JSON/SSE API. */
 import index from "./src/index.html";
 import { generate, followUp, cleanup, cancel, loadSessions, summarize, autoPlace, fillinScan, fillinWrite, writeCleanup } from "./agent/runner";
 import { detectSkills, listSkills, createSkill } from "./agent/skills";
 import { geminiAvailable, cliAvailable } from "./agent/gemini";
 import { readLogs, appendLog, clearLogs } from "./agent/logs";
 import { fetchClaudeUsage } from "./agent/usage";
-import { loadConfig, saveConfig, defaultSettings, mergeSettings, MODELS, ENGINES, DEFAULT_VAULT, type Settings } from "./agent/config";
+import { loadConfig, saveConfig, defaultSettings, mergeServerSettings, MODELS, ENGINES, DEFAULT_VAULT, type ServerSettings } from "./agent/config";
 import { stat } from "fs/promises";
 import { join } from "path";
 
@@ -15,7 +14,10 @@ const DEV = process.env.NODE_ENV !== "production";
 
 await loadSessions();
 
-// Wrap a streaming handler in an SSE Response. The handler receives `emit`.
+/*
+ * Wraps a streaming job in a Server-Sent Events response.
+ * `emit` serializes named events while keeping a broken client connection harmless.
+ */
 function sse(handler: (emit: (event: string, data: unknown) => void) => Promise<void>): Response {
   const stream = new ReadableStream({
     async start(controller) {
@@ -52,10 +54,10 @@ function sse(handler: (emit: (event: string, data: unknown) => void) => Promise<
   });
 }
 
-// Merge global config with a per-request settings override coming from the client.
-async function resolveSettings(override: Partial<Settings> | undefined): Promise<Settings> {
+/* Merges persisted configuration with a tab-specific client override. */
+async function resolveSettings(override: Partial<ServerSettings> | undefined): Promise<ServerSettings> {
   const global = await loadConfig();
-  const merged = mergeSettings(global, override);
+  const merged = mergeServerSettings(global, override);
   if (!merged.vaultDir) merged.vaultDir = DEFAULT_VAULT;
   return merged;
 }
@@ -68,9 +70,11 @@ const server = Bun.serve({
   routes: {
     "/": index,
 
+    /* Supplies static UI metadata without exposing server-only configuration. */
     "/api/meta": () =>
       Response.json({ models: MODELS, engines: ENGINES, defaults: defaultSettings(DEFAULT_VAULT) }),
 
+    /* Reads and partially updates durable application settings. */
     "/api/config": {
       GET: async () => Response.json(await loadConfig()),
       POST: async (req) => {
@@ -134,6 +138,7 @@ const server = Bun.serve({
       },
     },
 
+    /* Checks whether a selected directory is usable and recognizably a JJ vault. */
     "/api/vault/validate": async (req) => {
       const path = new URL(req.url).searchParams.get("path") || "";
       const known = [

@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "Vault Assistant — UI Redesign",
+  "entry": "vault-assistant-ui-redesign.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "primary": true,
+  "createdAt": "2026-06-22T03:08:59.002Z",
+  "updatedAt": "2026-06-22T03:08:59.010Z",
+  "metadata": {
+    "identifier": "vault-assistant-ui-redesign",
+    "artifactType": "text/html",
+    "inferred": false
+  }
+}

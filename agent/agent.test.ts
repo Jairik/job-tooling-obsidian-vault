@@ -19,10 +19,11 @@ import {
   buildFillinAnswerPrompt,
   buildWriteCleanupPrompt,
   defaultSettings,
-  effectiveEngineModel,
-  effectiveEngineReasoning,
-  normalizeSettings,
+  normalizeServerSettings,
 } from "./config";
+import { effectiveEngineModel, effectiveEngineReasoning } from "../shared/settings";
+import { defaultEngineModels, defaultEngineReasoning } from "../shared/settings";
+import { normalizeSettings as normalizeClientSettings } from "../src/lib/store";
 import { mkdtemp, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -111,7 +112,7 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
   });
 
   test("settings backfill per-engine model and reasoning defaults", () => {
-    const settings = normalizeSettings({
+    const settings = normalizeServerSettings({
       ...defaultSettings(),
       engine: "codex",
       model: "legacy-claude-model",
@@ -126,8 +127,18 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
     expect(effectiveEngineReasoning(settings, "codex")).toBe("max");
   });
 
+  test("server and client settings share engine defaults", () => {
+    const server = defaultSettings();
+    const client = normalizeClientSettings({});
+
+    expect(server.engineModels).toEqual(defaultEngineModels());
+    expect(client.engineModels).toEqual(defaultEngineModels());
+    expect(server.engineReasoning).toEqual(defaultEngineReasoning());
+    expect(client.engineReasoning).toEqual(defaultEngineReasoning());
+  });
+
   test("CLI command builder passes custom model and reasoning settings", () => {
-    const settings = normalizeSettings({
+    const settings = normalizeServerSettings({
       ...defaultSettings(),
       engineModels: {
         gemini: "gemini-2.5-pro",
@@ -183,7 +194,7 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
   });
 
   test("CLI command builder transports current long prompts safely", () => {
-    const settings = normalizeSettings(defaultSettings());
+    const settings = normalizeServerSettings(defaultSettings());
     const longPrompt = `Return exactly VA_LONG_PROMPT_OK.\n\n${"vault context line\n".repeat(10_000)}`;
     expect(new TextEncoder().encode(longPrompt).length).toBeGreaterThan(150_000);
 
@@ -196,7 +207,7 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
   });
 
   test("CLI command builder keeps oversized prompts off argv for all supported CLI engines", () => {
-    const settings = normalizeSettings(defaultSettings());
+    const settings = normalizeServerSettings(defaultSettings());
     const tooLarge = "x".repeat(CLI_ARG_PROMPT_SOFT_LIMIT_BYTES + 1);
     for (const engine of ["gemini", "opencode", "cursor", "copilot", "codex"] as const) {
       const built = buildCliCommand(engine, { prompt: tooLarge, settings });

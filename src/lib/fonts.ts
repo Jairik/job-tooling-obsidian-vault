@@ -1,5 +1,4 @@
-// Google Fonts loader utility
-// Lazily loads fonts from Google Fonts CDN when needed
+/* Lazily loads Google Font stylesheets so unused font families do not block startup. */
 
 import type { FontFamily } from "./store";
 
@@ -28,11 +27,7 @@ export const FONT_OPTIONS: FontConfig[] = [
 
 const loadedFonts = new Set<FontFamily>();
 
-export function getFontFamily(id: FontFamily): string {
-  const config = FONT_OPTIONS.find((f) => f.id === id);
-  return config?.family ?? FONT_OPTIONS[0].family;
-}
-
+/* Ensures a chosen font is available, while allowing CSS fallbacks when loading fails. */
 export async function loadFont(id: FontFamily): Promise<void> {
   if (loadedFonts.has(id)) return;
 

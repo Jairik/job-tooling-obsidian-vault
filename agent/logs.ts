@@ -12,7 +12,7 @@ const LOG_FILE = join(LOG_DIR, "activity.jsonl");
 
 // Keep the on-disk log bounded. A little larger than the client cap so the file
 // holds a bit more history than any single browser session shows.
-export const LOG_CAP = 1000;
+const LOG_CAP = 1000;
 const COMPACT_AT = LOG_CAP * 2;
 
 // Mirrors the client LogEntry (src/lib/store.ts). Kept loose on purpose: the
@@ -32,6 +32,7 @@ export interface LogEntry {
   chars?: number;
 }
 
+/* Parses JSONL defensively so one damaged line does not hide the whole log. */
 function parseLines(text: string): LogEntry[] {
   const out: LogEntry[] = [];
   for (const line of text.split("\n")) {
@@ -45,6 +46,7 @@ function parseLines(text: string): LogEntry[] {
   return out;
 }
 
+/* Reads the durable log, returning an empty list when it has not been created. */
 export async function readLogs(): Promise<LogEntry[]> {
   try {
     const entries = parseLines(await readFile(LOG_FILE, "utf8"));
@@ -54,6 +56,7 @@ export async function readLogs(): Promise<LogEntry[]> {
   }
 }
 
+/* Appends one activity event and trims the file when it grows too large. */
 export async function appendLog(entry: LogEntry): Promise<void> {
   if (!entry || typeof entry.id !== "string") return;
   try {
@@ -67,6 +70,7 @@ export async function appendLog(entry: LogEntry): Promise<void> {
 
 // Rewrite the file down to the most recent LOG_CAP entries once it has roughly
 // doubled past the cap, so the append log can't grow without bound.
+/* Rewrites the log with recent entries after it crosses the compaction threshold. */
 async function compactIfNeeded(): Promise<void> {
   try {
     const entries = parseLines(await readFile(LOG_FILE, "utf8"));
@@ -78,6 +82,7 @@ async function compactIfNeeded(): Promise<void> {
   }
 }
 
+/* Clears durable activity history at the user's request. */
 export async function clearLogs(): Promise<void> {
   try {
     await writeFile(LOG_FILE, "");

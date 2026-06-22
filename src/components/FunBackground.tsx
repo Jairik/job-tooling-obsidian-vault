@@ -1,36 +1,12 @@
 import { useEffect, useRef } from "react";
+import { type FunVariant } from "../../shared/design";
 
-// Animated backgrounds for "fun mode" — inspired by reactbits.dev, but
-// reimplemented dependency-free (pure CSS + a small 2D canvas) so the app
-// stays a no-install Bun project. Cyclable from the header.
-export const FUN_VARIANTS = [
-  { id: "aurora", label: "Aurora" },
-  { id: "particles", label: "Particles" },
-  { id: "waves", label: "Waves" },
-  { id: "dots", label: "Dot Grid" },
-  { id: "mesh", label: "Mesh" },
-  { id: "matrix", label: "Matrix Rain" },
-  { id: "starfield", label: "Starfield" },
-  { id: "grid3d", label: "3D Grid" },
-  { id: "flicker", label: "Flickering Grid" },
-  { id: "comet", label: "Shooting Stars" },
-  { id: "balatro", label: "Balatro" },
-] as const;
-
-export type FunVariant = (typeof FUN_VARIANTS)[number]["id"];
-
-export function nextFunVariant(v: FunVariant): FunVariant {
-  const i = FUN_VARIANTS.findIndex((x) => x.id === v);
-  return FUN_VARIANTS[(i + 1) % FUN_VARIANTS.length].id;
-}
-
-export function funLabel(v: FunVariant): string {
-  return FUN_VARIANTS.find((x) => x.id === v)?.label ?? "Aurora";
-}
-
+/* Animated, dependency-free canvas/CSS backgrounds used when fun mode is enabled. */
+/* Reads the active theme so canvas scenes can use an appropriate contrast palette. */
 const isDark = () => (document.documentElement.dataset.theme ?? "dark") !== "light";
 
 // HSL to RGB helper for Balatro shader
+/* Converts CSS-style HSL values into RGB channels for canvas drawing. */
 function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   let r, g, b;
   if (s === 0) {
@@ -54,6 +30,7 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
 }
 
 // Canvas scenes. CSS scenes are handled with plain divs.
+/* Owns the canvas lifecycle and redraw loop for the selected animated background. */
 function useCanvasScene(variant: FunVariant) {
   const ref = useRef<HTMLCanvasElement | null>(null);
 
@@ -70,13 +47,14 @@ function useCanvasScene(variant: FunVariant) {
     let w = 0;
     let h = 0;
 
-    // State variables for various effects
+    /* Per-scene state is recreated on resize so canvas dimensions stay in sync. */
     let particles: { x: number; y: number; vx: number; vy: number; r: number }[] = [];
     let matrixDrops: number[] = [];
     let stars: { x: number; y: number; z: number }[] = [];
     let flickerSquares: { x: number; y: number; w: number; h: number; alpha: number; targetAlpha: number; speed: number }[] = [];
     let comets: { x: number; y: number; len: number; speed: number; angle: number }[] = [];
 
+    /* Seeds the particle scene at a density proportional to the visible canvas. */
     const initParticles = () => {
       const count = Math.round(Math.min(110, (w * h) / 15000));
       particles = Array.from({ length: count }, () => ({
@@ -88,11 +66,13 @@ function useCanvasScene(variant: FunVariant) {
       }));
     };
 
+    /* Creates one falling-character position for each Matrix-style column. */
     const initMatrix = () => {
       const columns = Math.floor(w / 14) + 1;
       matrixDrops = Array.from({ length: columns }, () => Math.random() * -100);
     };
 
+    /* Places stars in pseudo-3D coordinates for perspective movement. */
     const initStarfield = () => {
       const count = 120;
       stars = Array.from({ length: count }, () => ({
@@ -102,6 +82,7 @@ function useCanvasScene(variant: FunVariant) {
       }));
     };
 
+    /* Creates independently fading cells for the flickering grid scene. */
     const initFlicker = () => {
       const cols = Math.floor(w / 40) + 1;
       const rows = Math.floor(h / 40) + 1;
@@ -121,6 +102,7 @@ function useCanvasScene(variant: FunVariant) {
       }
     };
 
+    /* Seeds a small reusable comet set rather than allocating objects per frame. */
     const initComets = () => {
       comets = Array.from({ length: 6 }, () => ({
         x: Math.random() * w,
@@ -131,6 +113,7 @@ function useCanvasScene(variant: FunVariant) {
       }));
     };
 
+    /* Resizes for device pixel ratio and resets data that depends on canvas dimensions. */
     const resize = () => {
       w = canvas.clientWidth;
       h = canvas.clientHeight;
@@ -362,6 +345,7 @@ function useCanvasScene(variant: FunVariant) {
   return ref;
 }
 
+/* Mounts the decorative background canvas behind the application content. */
 export function FunBackground({ variant }: { variant: FunVariant }) {
   const isCanvas = variant === "particles" || variant === "waves" || variant === "matrix" || variant === "starfield" || variant === "flicker" || variant === "comet" || variant === "balatro";
   const ref = useCanvasScene(variant);

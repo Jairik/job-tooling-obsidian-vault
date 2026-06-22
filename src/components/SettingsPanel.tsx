@@ -3,12 +3,12 @@
 // accent, animated backgrounds). Changes are lifted to App via onChange /
 // onDesignChange, which persist them; this component holds no source of truth.
 import { useEffect, useState } from "react";
-import type { Settings, TabMode, DesignSettings, FontFamily, BorderRadius, SpacingScale, ShadowIntensity, SkillInfo } from "../lib/store";
-import { DEFAULT_DESIGN, effectiveEngineModel, effectiveEngineReasoning } from "../lib/store";
+import type { Settings, TabMode, DesignSettings, SkillInfo } from "../lib/store";
+import { effectiveEngineModel, effectiveEngineReasoning } from "../../shared/settings";
 import { api, type ModelOption } from "../lib/api";
-import { FONT_OPTIONS, loadFont } from "../lib/fonts";
-import { FUN_VARIANTS, funLabel, type FunVariant } from "./FunBackground";
+import { loadFont } from "../lib/fonts";
 import { UsagePanel } from "./UsagePanel";
+import { DesignSettingsSection } from "./DesignSettingsSection";
 
 type CreateSkillResult = { ok: boolean; error?: string };
 
@@ -37,6 +37,7 @@ interface VaultState {
 // Compact status indicator: a small colored dot that reveals its full status
 // text on hover/focus, instead of an always-visible green/red line. Keeps the
 // settings panel uncluttered while keeping the detail one hover away.
+/* Shows a compact available/unavailable indicator with explanatory hover text. */
 function StatusTip({ ok, tip, label }: { ok: boolean; tip: string; label?: string }) {
   return (
     <span className={`status-tip ${ok ? "ok" : "bad"}`} data-tip={tip} tabIndex={0} aria-label={tip}>
@@ -48,11 +49,13 @@ function StatusTip({ ok, tip, label }: { ok: boolean; tip: string; label?: strin
 
 const REASONING_PRESETS = ["low", "medium", "high", "minimal", "max", "xhigh"];
 
+/* Maps an internal engine identifier to the executable users need to install. */
 function engineCliName(engine: Settings["engine"]): string {
   if (engine === "gemini") return "agy";
   return engine;
 }
 
+/* Provides configuration for engines, retrieval, vault paths, skills, and visual design. */
 export function SettingsPanel({
   settings,
   models,
@@ -85,6 +88,7 @@ export function SettingsPanel({
   const selectedEngineAvailable =
     settings.engine === "claude" || Boolean(skills[settings.engine as keyof typeof skills]);
 
+  /* Updates only the selected engine's model, preserving choices for other engines. */
   const setEngineModel = (model: string) => {
     const engineModels = { ...(settings.engineModels ?? {}), [settings.engine]: model };
     onChange({
@@ -93,6 +97,7 @@ export function SettingsPanel({
     });
   };
 
+  /* Updates only the selected engine's reasoning preference. */
   const setEngineReasoning = (reasoning: string) => {
     const engineReasoning = { ...(settings.engineReasoning ?? {}), [settings.engine]: reasoning };
     const effort =
@@ -103,6 +108,7 @@ export function SettingsPanel({
     });
   };
 
+  /* Validates and submits the small in-panel form used to create a skill. */
   const submitSkill = async () => {
     setSkillBusy(true);
     setSkillError("");
@@ -138,10 +144,6 @@ export function SettingsPanel({
       loadFont(design.fontFamily);
     }
   }, [design.fontFamily]);
-
-  const handleReset = () => {
-    onDesignChange(DEFAULT_DESIGN);
-  };
 
   return (
     <div className="drawer-backdrop" onClick={onClose}>
@@ -494,161 +496,8 @@ export function SettingsPanel({
           )}
         </div>
 
-        {/* Background Section */}
-        <div className="settings-section">
-          <div className="settings-section-title">Background</div>
+        <DesignSettingsSection design={design} onChange={onDesignChange} />
 
-          <label className="toggle-row">
-            <input
-              type="checkbox"
-              checked={design.funEnabled}
-              onChange={(e) => onDesignChange({ funEnabled: e.target.checked })}
-            />
-            <span>Animated background (fun mode)</span>
-          </label>
-
-          {design.funEnabled && (
-            <div className="fun-variant-grid">
-              {FUN_VARIANTS.map((v) => (
-                <button
-                  key={v.id}
-                  className={`fun-variant-option ${design.funVariant === v.id ? "active" : ""}`}
-                  onClick={() => onDesignChange({ funVariant: v.id as FunVariant })}
-                >
-                  {v.label}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Typography Section */}
-        <div className="settings-section">
-          <div className="settings-section-title">Typography</div>
-
-          <label className="field">
-            <span>Font family</span>
-            <select
-              value={design.fontFamily}
-              onChange={(e) => onDesignChange({ fontFamily: e.target.value as FontFamily })}
-            >
-              {FONT_OPTIONS.map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="field">
-            <span>Font scale ({design.fontScale.toFixed(2)}x)</span>
-            <input
-              type="range"
-              min={0.8}
-              max={1.2}
-              step={0.05}
-              value={design.fontScale}
-              onChange={(e) => onDesignChange({ fontScale: Number(e.target.value) })}
-            />
-          </label>
-        </div>
-
-        {/* Colors Section */}
-        <div className="settings-section">
-          <div className="settings-section-title">Colors</div>
-
-          <label className="field">
-            <span>Accent hue ({design.accentHue}°)</span>
-            <input
-              type="range"
-              min={0}
-              max={360}
-              step={1}
-              value={design.accentHue}
-              onChange={(e) => onDesignChange({ accentHue: Number(e.target.value) })}
-            />
-          </label>
-
-          <label className="field">
-            <span>Accent intensity ({(design.accentChroma * 100).toFixed(0)}%)</span>
-            <input
-              type="range"
-              min={0.05}
-              max={0.2}
-              step={0.01}
-              value={design.accentChroma}
-              onChange={(e) => onDesignChange({ accentChroma: Number(e.target.value) })}
-            />
-          </label>
-
-          <div
-            className="color-swatch"
-            style={{
-              background: `oklch(72% ${design.accentChroma} ${design.accentHue})`,
-            }}
-            title="Accent color preview"
-          />
-        </div>
-
-        {/* Layout Section */}
-        <div className="settings-section">
-          <div className="settings-section-title">Layout</div>
-
-          <label className="field">
-            <span>Border radius</span>
-          </label>
-          <div className="radius-preview">
-            {(["sharp", "rounded", "pill", "circle"] as BorderRadius[]).map((r) => (
-              <button
-                key={r}
-                className={`radius-option ${design.borderRadius === r ? "active" : ""}`}
-                data-radius={r}
-                onClick={() => onDesignChange({ borderRadius: r })}
-                title={r}
-              >
-                {r === "sharp" ? "▢" : r === "rounded" ? "▢" : r === "pill" ? "⬭" : "○"}
-              </button>
-            ))}
-          </div>
-
-          <label className="field" style={{ marginTop: "var(--space-2)" }}>
-            <span>Spacing</span>
-          </label>
-          <div className="shadow-preview">
-            {(["compact", "comfortable", "spacious"] as SpacingScale[]).map((s) => (
-              <button
-                key={s}
-                className={`shadow-option ${design.spacingScale === s ? "active" : ""}`}
-                onClick={() => onDesignChange({ spacingScale: s })}
-                title={s}
-              >
-                {s === "compact" ? "▪" : s === "comfortable" ? "▫" : "□"}
-              </button>
-            ))}
-          </div>
-
-          <label className="field" style={{ marginTop: "var(--space-2)" }}>
-            <span>Shadow intensity</span>
-          </label>
-          <div className="shadow-preview">
-            {(["none", "subtle", "medium", "strong"] as ShadowIntensity[]).map((s) => (
-              <button
-                key={s}
-                className={`shadow-option ${design.shadowIntensity === s ? "active" : ""}`}
-                data-shadow={s}
-                onClick={() => onDesignChange({ shadowIntensity: s })}
-                title={s}
-              >
-                {s === "none" ? "○" : s === "subtle" ? "◦" : s === "medium" ? "●" : "◉"}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Reset Section */}
-        <div className="settings-reset">
-          <button onClick={handleReset}>Reset Design to Defaults</button>
-        </div>
       </aside>
     </div>
   );

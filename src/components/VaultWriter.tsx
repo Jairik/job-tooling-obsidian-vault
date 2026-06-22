@@ -23,6 +23,7 @@ interface Props {
   onCancel: () => void;
 }
 
+/* Provides the summarize, placement, fill-in, cleanup, and write-to-vault workflow. */
 export function VaultWriter({
   tab,
   globalSettings,

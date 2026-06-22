@@ -32,16 +32,19 @@ const KIND_LABEL: Record<LogKind, string> = {
   tool: "tool",
 };
 
+/* Formats an epoch timestamp for compact display in the activity history. */
 function fmtTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
+/* Formats optional elapsed milliseconds without displaying meaningless zero values. */
 function fmtDuration(ms?: number): string {
   if (ms == null) return "";
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+/* Shows the durable activity history and offers a single clear-history action. */
 export function LogsModal({ logs, onClear, onClose }: Props) {
   const dark = (document.documentElement.dataset.theme ?? "dark") !== "light";
   const axisColor = dark ? "#8a93a6" : "#6b7280";

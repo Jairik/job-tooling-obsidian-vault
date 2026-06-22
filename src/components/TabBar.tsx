@@ -24,6 +24,7 @@ const PHASE_DOT: Record<string, string> = {
   error: "dot-error",
 };
 
+/* Renders tab selection, inline renaming, and workspace-level tab controls. */
 export function TabBar({ tabs, activeId, onSelect, onAdd, onClose, onClearAll, onRename }: Props) {
   const [editing, setEditing] = useState<string | null>(null);
 
