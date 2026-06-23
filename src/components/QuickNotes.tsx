@@ -73,10 +73,32 @@ function Icon({ name }: { name: string }) {
 export function QuickNotes({ onClose }: Props) {
   const [qn, setQn] = useState<QN>(() => loadQuickNotes());
   const [copied, setCopied] = useState<string | null>(null);
+  // Drive the slide-in transition: mount off-screen, then add `.open` next frame.
+  const [open, setOpen] = useState(false);
 
   useEffect(() => {
     saveQuickNotes(qn);
   }, [qn]);
+
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setOpen(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+
+  // Animate out, then unmount via the parent.
+  const handleClose = () => {
+    setOpen(false);
+    setTimeout(onClose, 200);
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") handleClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /* Copies one field and tracks which control should display the confirmation state. */
   const copy = async (id: string, text: string) => {
@@ -129,19 +151,17 @@ export function QuickNotes({ onClose }: Props) {
     setQn((q) => ({ ...q, boxes: [...q.boxes, { id: uid(), label: "New box", value: "" }] }));
 
   return (
-    <div className="drawer-backdrop" onClick={onClose}>
-      <aside className="drawer quicknotes" onClick={(e) => e.stopPropagation()}>
-        <div className="drawer-head">
-          <h2>Quick notes</h2>
-          <button className="icon-btn" onClick={onClose}>
-            ×
-          </button>
-        </div>
-        <p className="drawer-sub">
-          Reusable links, references, and snippets — copy any field into an application in one
-          click. Saved on this device.
-        </p>
-
+    <div className={`qn-panel ${open ? "open" : ""}`}>
+      <div className="qn-hd">
+        <span className="qn-title">Quick Notes</span>
+        <button className="icon-btn" onClick={handleClose} aria-label="Close quick notes">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+      <div className="qn-body">
         <section className="qn-section">
           <div className="qn-section-head">
             <span className="qn-section-title">Links</span>
@@ -285,7 +305,7 @@ export function QuickNotes({ onClose }: Props) {
             )}
           </div>
         </section>
-      </aside>
+      </div>
     </div>
   );
 }

@@ -5,3 +5,4 @@ config.json
 *.log
 logs/
 bun.lock
+**skills-lock.json

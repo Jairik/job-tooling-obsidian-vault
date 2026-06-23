@@ -131,9 +131,10 @@ export function App() {
     // Font scale via CSS custom property
     el.style.setProperty("--font-scale", String(design.fontScale));
 
-    // Accent color
-    el.dataset.accentHue = String(design.accentHue);
-    el.dataset.accentChroma = String(design.accentChroma);
+    // Accent color: the token --accent reads these CSS vars (oklch hue + chroma),
+    // so the Appearance sliders drive the accent live across the whole UI.
+    el.style.setProperty("--accent-hue", String(design.accentHue));
+    el.style.setProperty("--accent-chroma", String(design.accentChroma));
 
     // Border radius
     el.dataset.radius = design.borderRadius;
@@ -514,18 +515,6 @@ export function App() {
   const engineLabel = engines.find((e) => e.id === settings.engine)?.label?.toLowerCase() || settings.engine;
   const currentModel = effectiveEngineModel(settings);
   const currentReasoning = effectiveEngineReasoning(settings);
-  const phase = active?.phase ?? "idle";
-  const phaseTone =
-    phase === "done" ? "ok" : phase === "error" ? "bad" : phase === "idle" ? "" : "warn";
-  const phaseText: Record<string, string> = {
-    idle: "idle",
-    draft: "working",
-    humanize: "humanizing",
-    cleanup: "cleaning up",
-    followup: "revising",
-    done: "ready",
-    error: "error",
-  };
 
   /* Supplies one tab and its callbacks to either the primary or secondary pane. */
   const renderPane = (paneTab: Tab) => (
@@ -537,6 +526,8 @@ export function App() {
       engines={engines}
       skills={skills}
       availableSkills={availableSkills}
+      engineLabel={engineLabel}
+      model={currentModel}
       onPatch={(patch) => patchTab(paneTab.id, patch)}
       onGenerate={() => runGenerate(paneTab)}
       onFollowUp={(text) => runFollowUp(paneTab, text)}
@@ -556,18 +547,24 @@ export function App() {
   return (
     <div className="app">
       {design.funEnabled && <FunBackground variant={design.funVariant} />}
-      <header className="topbar">
-        <div className="brand">
-          <span className="app-icon" title="Vault Assistant">
-            <span className="app-icon-mark">VA</span>
-          </span>
-          <div className="brand-text">
-            <span className="kicker">grounded · obsidian vault</span>
-            <span className="brand-title">Vault Assistant</span>
-          </div>
-        </div>
-        {design.toolbarDropdown ? (
-          <div className="topbar-meta">
+      <header className="toolbar">
+        <a className="logo" href="#" onClick={(e) => e.preventDefault()} title="Vault Assistant">
+          <span className="logo-mark">VA</span>
+          <span className="logo-text">Vault</span>
+        </a>
+
+        <TabBar
+          tabs={tabs}
+          activeId={active?.id ?? ""}
+          onSelect={setActiveId}
+          onAdd={addTab}
+          onClose={closeTab}
+          onClearAll={clearAllTabs}
+          onRename={(id, name) => updateTab(id, { name, autoNamed: false })}
+        />
+
+        <div className="t-actions">
+          {design.toolbarDropdown ? (
             <div className="toolbar-dropdown-wrap">
               <button
                 className={`icon-btn ${toolbarDropOpen ? "active" : ""}`}
@@ -663,85 +660,60 @@ export function App() {
                 </>
               )}
             </div>
-          </div>
-        ) : (
-          <div className="topbar-meta">
-            <span className="pill">{engineLabel}</span>
-            {currentModel && (
-              <span className="pill">{currentModel.replace("claude-", "")}</span>
-            )}
-            {currentReasoning && (
-              <span className="pill">{currentReasoning} reasoning</span>
-            )}
-            {active?.rag && (
-              <span
-                className="pill pill--accent"
-                title="Retrieval-augmented — only relevant vault excerpts are sent"
+          ) : (
+            <>
+              <button
+                className={`icon-btn ${split ? "active" : ""}`}
+                title={split ? "Close split view" : "Split view"}
+                onClick={toggleSplit}
               >
-                <span className="dot accent" />
-                RAG
-              </span>
-            )}
-            <button
-              className={`icon-btn ${split ? "active" : ""}`}
-              title={split ? "Close split view" : "Split view"}
-              onClick={toggleSplit}
-            >
-              ◫
-            </button>
-            <button
-              className="icon-btn"
-              title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-              onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
-            >
-              {theme === "dark" ? "☾" : "☀"}
-            </button>
-            <button
-              className="icon-btn"
-              title={density === "compact" ? "Comfortable density" : "Compact density"}
-              onClick={() => setDensity((d) => (d === "compact" ? "comfortable" : "compact"))}
-            >
-              {density === "compact" ? "▣" : "▢"}
-            </button>
-            <button
-              className={`icon-btn ${quickOpen ? "active" : ""}`}
-              title="Quick notes — reusable links & snippets"
-              onClick={() => setQuickOpen(true)}
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
-                <path d="M14 3v5h5M9 13h6M9 17h4" />
-              </svg>
-            </button>
-            <button
-              className={`icon-btn ${logsOpen ? "active" : ""}`}
-              title="Logs — recent activity & stats"
-              onClick={() => setLogsOpen(true)}
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                <path d="M3 3v18h18" />
-                <path d="M7 14l3-4 3 3 4-6" />
-              </svg>
-            </button>
-            <button className="icon-btn" title="Settings" onClick={() => setSettingsOpen(true)}>
-              ⚙
-            </button>
-          </div>
-        )}
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <rect x="3" y="4" width="18" height="16" rx="2" />
+                  <line x1="12" y1="4" x2="12" y2="20" />
+                </svg>
+              </button>
+              <button
+                className={`icon-btn ${quickOpen ? "active" : ""}`}
+                title="Quick notes — reusable links & snippets"
+                onClick={() => setQuickOpen(true)}
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+                  <path d="M14 3v5h5M9 13h6M9 17h4" />
+                </svg>
+              </button>
+              <button
+                className={`icon-btn ${logsOpen ? "active" : ""}`}
+                title="Logs — recent activity & stats"
+                onClick={() => setLogsOpen(true)}
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                  <line x1="16" y1="13" x2="8" y2="13" />
+                  <line x1="16" y1="17" x2="8" y2="17" />
+                </svg>
+              </button>
+              <button
+                className="icon-btn icon-btn-emoji"
+                title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+                onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+              >
+                {theme === "dark" ? "🌙" : "☀️"}
+              </button>
+              <button className="icon-btn" title="Settings" onClick={() => setSettingsOpen(true)}>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                </svg>
+              </button>
+            </>
+          )}
+        </div>
       </header>
 
-      <TabBar
-        tabs={tabs}
-        activeId={active?.id ?? ""}
-        onSelect={setActiveId}
-        onAdd={addTab}
-        onClose={closeTab}
-        onClearAll={clearAllTabs}
-        onRename={(id, name) => updateTab(id, { name, autoNamed: false })}
-      />
-
       {split ? (
-        <main className="content content-split">
+        <main className="main content-split">
           <section className="pane">
             <div className="pane-head">
               <span className="pane-label">Left</span>
@@ -775,7 +747,7 @@ export function App() {
           </section>
         </main>
       ) : (
-        <main className="content">{active && renderPane(active)}</main>
+        <main className="main">{active && renderPane(active)}</main>
       )}
 
       {settingsOpen && (
@@ -787,6 +759,10 @@ export function App() {
           availableSkills={availableSkills}
           defaultMode={defaultMode}
           design={design}
+          theme={theme}
+          density={density}
+          onThemeChange={setTheme}
+          onDensityChange={setDensity}
           onDefaultModeChange={setDefaultMode}
           onChange={changeSettings}
           onDesignChange={changeDesign}
@@ -809,30 +785,6 @@ export function App() {
           onClose={() => setLogsOpen(false)}
         />
       )}
-
-      <footer className="statusbar">
-        <div className="statusbar-left">
-          <span className="status-pill">
-            <span className={`status-dot ${phaseTone}`} />
-            {phaseText[phase] ?? phase}
-          </span>
-          <span className="sb-sep">·</span>
-          <span className="sb-dim">{engineLabel}</span>
-          {active?.rag && (
-            <>
-              <span className="sb-sep">·</span>
-              <span>RAG</span>
-            </>
-          )}
-        </div>
-        <div className="statusbar-right">
-          <span className="sb-dim">
-            {tabs.length} tab{tabs.length === 1 ? "" : "s"}
-          </span>
-          <span className="sb-sep">·</span>
-          <span className="sb-dim">bun · sse</span>
-        </div>
-      </footer>
     </div>
   );
 }
