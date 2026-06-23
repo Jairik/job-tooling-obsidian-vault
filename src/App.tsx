@@ -24,8 +24,6 @@ import {
   uid,
   LOG_CAP,
   DEFAULT_DESIGN,
-  effectiveEngineModel,
-  effectiveEngineReasoning,
   type Settings,
   type Tab,
   type TabMode,
@@ -33,14 +31,17 @@ import {
   type DesignSettings,
   type SkillInfo,
 } from "./lib/store";
-import { api, streamPost, type ModelOption } from "./lib/api";
+import { effectiveEngineModel, effectiveEngineReasoning } from "../shared/settings";
+import { api, streamPost, type ModelOption, type SSEHandlers } from "./lib/api";
 import { TabBar } from "./components/TabBar";
 import { TabView } from "./components/TabView";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { QuickNotes } from "./components/QuickNotes";
 import { LogsModal } from "./components/LogsModal";
 import { FunBackground } from "./components/FunBackground";
+import { createConversationActions } from "./lib/conversation-actions";
 
+/* Reads localStorage safely for browsers that block or clear client storage. */
 function readLS(key: string): string | null {
   try {
     return localStorage.getItem(key);
@@ -49,6 +50,7 @@ function readLS(key: string): string | null {
   }
 }
 
+/* Writes a UI preference without letting a storage error interrupt rendering. */
 function writeLS(key: string, value: string): void {
   try {
     localStorage.setItem(key, value);
@@ -57,6 +59,7 @@ function writeLS(key: string, value: string): void {
   }
 }
 
+/* Owns global UI state, persistence, tab lifecycle, and the application layout. */
 export function App() {
   const [tabs, setTabs] = useState<Tab[]>(() => loadTabs());
   const [activeId, setActiveId] = useState<string>(() => {
@@ -218,12 +221,14 @@ export function App() {
     return res;
   };
 
+  /* Applies a static or state-derived patch to exactly one tab. */
   const updateTab = (id: string, patch: Partial<Tab> | ((t: Tab) => Partial<Tab>)) => {
     setTabs((prev) =>
       prev.map((t) => (t.id === id ? { ...t, ...(typeof patch === "function" ? patch(t) : patch) } : t))
     );
   };
 
+  /* Updates settings optimistically, then persists the small patch to the server. */
   const changeSettings = (patch: Partial<Settings>) => {
     setSettings((prev) => {
       const next = mergeSettings(prev as Settings, patch);
@@ -233,10 +238,12 @@ export function App() {
     });
   };
 
+  /* Updates visual preferences separately from model and vault configuration. */
   const changeDesign = (patch: Partial<DesignSettings>) => {
     setDesign((prev) => ({ ...prev, ...patch }));
   };
 
+  /* Opens an independent tab using the active default mode and RAG preference. */
   const addTab = () => {
     const t = newTab(tabs, settings?.rag ?? false, defaultMode);
     setTabs((prev) => [...prev, t]);
@@ -251,6 +258,7 @@ export function App() {
     setActiveId(t.id);
   };
 
+  /* Cancels work, removes the tab, and selects a sensible remaining tab. */
   const closeTab = (id: string) => {
     controllers.current.get(id)?.abort();
     api.cancel(id).catch(() => {});
@@ -277,216 +285,45 @@ export function App() {
     setRightId("");
   };
 
-  const runGenerate = (tab: Tab) => {
-    if (!settings) return;
+  const { runGenerate, runFollowUp, runCleanup, cancel } = createConversationActions({
+    settings,
+    controllers: controllers.current,
+    updateTab,
+    addLog,
+  });
+
+  /* Shares abort, phase, error, and final cleanup handling across writer endpoints. */
+  const runWriterStream = (
+    tab: Tab,
+    endpoint: string,
+    body: unknown,
+    initial: Partial<Tab> | ((current: Tab) => Partial<Tab>),
+    handlers: Omit<SSEHandlers, "phase" | "error">
+  ) => {
     controllers.current.get(tab.id)?.abort();
     const controller = new AbortController();
     controllers.current.set(tab.id, controller);
-    updateTab(tab.id, {
-      draft: "",
-      answer: "",
-      activity: [],
-      messages: [],
-      notice: undefined,
-      error: undefined,
-      phase: "draft",
-    });
-
-    // Auto-name the tab from its content (fully offline — company name or topic).
-    if (tab.autoNamed) {
-      const title = deriveTitleLocal(tab.jobDescription, tab.question);
-      if (title) updateTab(tab.id, (t) => (t.autoNamed ? { name: title } : {}));
-    }
-
-    const overrideBody = overrideSettingsBody(tab, settings);
-    const eff = tab.overrideEnabled ? tab.override ?? settings : settings;
-    const effModel = effectiveEngineModel(eff);
-    const meta = { tabId: tab.id, tabName: tab.name, tabColor: tab.color };
-    const startedAt = Date.now();
-    addLog({ ...meta, kind: "generate", engine: eff.engine, model: effModel, question: tab.question });
+    updateTab(tab.id, initial);
 
     streamPost(
-      `/api/tabs/${tab.id}/generate`,
-      { jobDescription: tab.jobDescription, question: tab.question, skills: tab.skills, rag: tab.rag, mode: tab.mode, settings: overrideBody },
+      `/api/tabs/${tab.id}/${endpoint}`,
+      body,
       {
-        phase: (d) => updateTab(tab.id, { phase: d.phase }),
-        text: (d) =>
-          updateTab(tab.id, (t) =>
-            d.phase === "draft" ? { draft: t.draft + d.delta } : { answer: t.answer + d.delta }
-          ),
-        draft: (d) => updateTab(tab.id, { draft: d.text }),
-        activity: (d) => {
-          updateTab(tab.id, (t) => ({ activity: [...t.activity, d] }));
-          addLog({ ...meta, kind: "tool", detail: `${d.tool} · ${d.input}` });
-        },
-        notice: (d) => updateTab(tab.id, { notice: d.message }),
-        done: (d) => {
-          updateTab(tab.id, { answer: d.text, phase: "done" });
-          addLog({
-            ...meta,
-            kind: "answer",
-            engine: eff.engine,
-            model: effModel,
-            question: tab.question,
-            durationMs: Date.now() - startedAt,
-            chars: d.text.length,
-            detail: d.text.slice(0, 280),
-          });
-        },
-        error: (d) => {
-          updateTab(tab.id, { error: d.message, phase: "error" });
-          addLog({ ...meta, kind: "error", detail: d.message });
-        },
-        session: () => {},
+        phase: (data) => updateTab(tab.id, { phase: data.phase }),
+        error: (data) => updateTab(tab.id, { phase: "error", error: data.message }),
+        ...handlers,
       },
       controller.signal
     )
-      .catch((e) => {
-        if (controller.signal.aborted) {
-          updateTab(tab.id, (t) => ({ phase: t.answer || t.draft ? "done" : "idle" }));
-        } else {
-          const message = String(e?.message || e);
-          updateTab(tab.id, { error: message, phase: "error" });
-          addLog({ ...meta, kind: "error", detail: message });
-        }
+      .catch((error) => {
+        if (!controller.signal.aborted) updateTab(tab.id, { phase: "error", error: String(error) });
       })
       .finally(() => controllers.current.delete(tab.id));
-  };
-
-  const runFollowUp = (tab: Tab, text: string) => {
-    if (!settings) return;
-    controllers.current.get(tab.id)?.abort();
-    const controller = new AbortController();
-    controllers.current.set(tab.id, controller);
-    updateTab(tab.id, (t) => ({
-      messages: [...t.messages, { role: "user", text }],
-      phase: "followup",
-      activity: [],
-      answer: "",
-      error: undefined,
-    }));
-    const overrideBody = overrideSettingsBody(tab, settings);
-    const eff = tab.overrideEnabled ? tab.override ?? settings : settings;
-    const effModel = effectiveEngineModel(eff);
-    const meta = { tabId: tab.id, tabName: tab.name, tabColor: tab.color };
-    const startedAt = Date.now();
-    addLog({ ...meta, kind: "followup", engine: eff.engine, model: effModel, question: text });
-
-    streamPost(
-      `/api/tabs/${tab.id}/message`,
-      { text, skills: tab.skills, rag: tab.rag, mode: tab.mode, settings: overrideBody },
-      {
-        phase: (d) => updateTab(tab.id, { phase: d.phase }),
-        text: (d) => updateTab(tab.id, (t) => ({ answer: t.answer + d.delta })),
-        activity: (d) => {
-          updateTab(tab.id, (t) => ({ activity: [...t.activity, d] }));
-          addLog({ ...meta, kind: "tool", detail: `${d.tool} · ${d.input}` });
-        },
-        done: (d) => {
-          updateTab(tab.id, (t) => ({
-            answer: d.text,
-            phase: "done",
-            messages: [...t.messages, { role: "assistant", text: d.text }],
-          }));
-          addLog({
-            ...meta,
-            kind: "answer",
-            engine: eff.engine,
-            model: effModel,
-            question: text,
-            durationMs: Date.now() - startedAt,
-            chars: d.text.length,
-            detail: d.text.slice(0, 280),
-          });
-        },
-        error: (d) => {
-          updateTab(tab.id, { error: d.message, phase: "error" });
-          addLog({ ...meta, kind: "error", detail: d.message });
-        },
-        session: () => {},
-      },
-      controller.signal
-    )
-      .catch((e) => {
-        if (controller.signal.aborted) updateTab(tab.id, { phase: "done" });
-        else {
-          const message = String(e?.message || e);
-          updateTab(tab.id, { error: message, phase: "error" });
-          addLog({ ...meta, kind: "error", detail: message });
-        }
-      })
-      .finally(() => controllers.current.delete(tab.id));
-  };
-
-  // Polish the current (possibly hand-edited) answer with the lightweight cleanup
-  // model: fix grammar + humanize. Streams a replacement into the answer panel;
-  // the original text is restored if the run is stopped or errors.
-  const runCleanup = (tab: Tab) => {
-    if (!settings) return;
-    const sourceText = (tab.answer || tab.draft).trim();
-    if (!sourceText) return;
-    controllers.current.get(tab.id)?.abort();
-    const controller = new AbortController();
-    controllers.current.set(tab.id, controller);
-    updateTab(tab.id, { phase: "cleanup", activity: [], answer: "", error: undefined, notice: undefined });
-
-    const overrideBody = overrideSettingsBody(tab, settings);
-    const eff = tab.overrideEnabled ? tab.override ?? settings : settings;
-    const cleanupModel = eff.engine === "claude" ? eff.cleanupModel : effectiveEngineModel(eff);
-    const meta = { tabId: tab.id, tabName: tab.name, tabColor: tab.color };
-    const startedAt = Date.now();
-    addLog({ ...meta, kind: "cleanup", engine: eff.engine, model: cleanupModel });
-
-    streamPost(
-      `/api/tabs/${tab.id}/cleanup`,
-      { text: sourceText, skills: tab.skills, settings: overrideBody },
-      {
-        phase: (d) => updateTab(tab.id, { phase: d.phase }),
-        text: (d) => updateTab(tab.id, (t) => ({ answer: t.answer + d.delta })),
-        activity: (d) => {
-          updateTab(tab.id, (t) => ({ activity: [...t.activity, d] }));
-          addLog({ ...meta, kind: "tool", detail: `${d.tool} · ${d.input}` });
-        },
-        notice: (d) => updateTab(tab.id, { notice: d.message }),
-        done: (d) => {
-          updateTab(tab.id, { answer: d.text || sourceText, phase: "done" });
-          addLog({
-            ...meta,
-            kind: "answer",
-            engine: eff.engine,
-            model: cleanupModel,
-            durationMs: Date.now() - startedAt,
-            chars: (d.text || "").length,
-            detail: (d.text || "").slice(0, 280),
-          });
-        },
-        error: (d) => {
-          updateTab(tab.id, (t) => ({ error: d.message, phase: "error", answer: t.answer || sourceText }));
-          addLog({ ...meta, kind: "error", detail: d.message });
-        },
-        session: () => {},
-      },
-      controller.signal
-    )
-      .catch((e) => {
-        if (controller.signal.aborted) {
-          updateTab(tab.id, (t) => ({ phase: "done", answer: t.answer || sourceText }));
-        } else {
-          const message = String(e?.message || e);
-          updateTab(tab.id, (t) => ({ error: message, phase: "error", answer: t.answer || sourceText }));
-          addLog({ ...meta, kind: "error", detail: message });
-        }
-      })
-      .finally(() => controllers.current.delete(tab.id));
-  };
-
-  const cancel = (id: string) => {
-    controllers.current.get(id)?.abort();
-    api.cancel(id).catch(() => {});
   };
 
   // ── Vault Writer Handlers ─────────────────────────────────────────────────
 
+  /* Fetches URL content when needed, then streams a vault-ready summary. */
   const runSummarize = async (tab: Tab) => {
     if (!settings) return;
     controllers.current.get(tab.id)?.abort();
@@ -499,6 +336,7 @@ export function App() {
     const isUrl = /^https?:\/\//i.test(input);
     let finalInput = input;
     
+    /* URLs are fetched server-side so the model receives text instead of a remote reference. */
     if (isUrl) {
       try {
         const res = await api.fetchUrl(input, settings.urlFetchMethod);
@@ -528,46 +366,31 @@ export function App() {
     }).finally(() => controllers.current.delete(tab.id));
   };
 
+  /* Asks the writer workflow to choose a destination path for the current content. */
   const runAutoPlace = (tab: Tab) => {
     if (!settings) return;
-    controllers.current.get(tab.id)?.abort();
-    const controller = new AbortController();
-    controllers.current.set(tab.id, controller);
-    
-    updateTab(tab.id, { phase: "draft", error: undefined, writeConfirmed: false });
-    const overrideBody = overrideSettingsBody(tab, settings);
-    
-    streamPost(
-      `/api/tabs/${tab.id}/auto-place`,
-      { content: tab.writeInput, settings: overrideBody },
-      {
-        phase: (d) => updateTab(tab.id, { phase: d.phase }),
-        done: (d) => updateTab(tab.id, { phase: "done", writePath: d.text }),
-        error: (d) => updateTab(tab.id, { phase: "error", error: d.message }),
-      },
-      controller.signal
-    ).catch((e) => {
-      if (!controller.signal.aborted) updateTab(tab.id, { phase: "error", error: String(e) });
-    }).finally(() => controllers.current.delete(tab.id));
+    runWriterStream(
+      tab,
+      "auto-place",
+      { content: tab.writeInput, settings: overrideSettingsBody(tab, settings) },
+      { phase: "draft", error: undefined, writeConfirmed: false },
+      { done: (data) => updateTab(tab.id, { phase: "done", writePath: data.text }) }
+    );
   };
 
+  /* Scans the selected vault area and converts the model's JSON response into UI records. */
   const runFillinScan = (tab: Tab) => {
     if (!settings) return;
-    controllers.current.get(tab.id)?.abort();
-    const controller = new AbortController();
-    controllers.current.set(tab.id, controller);
-    
-    updateTab(tab.id, { phase: "draft", error: undefined, writeConfirmed: false });
-    const overrideBody = overrideSettingsBody(tab, settings);
-    
-    streamPost(
-      `/api/tabs/${tab.id}/fillin-scan`,
-      { prompt: tab.writeInput, dir: tab.fillinDir, settings: overrideBody },
+    runWriterStream(
+      tab,
+      "fillin-scan",
+      { prompt: tab.writeInput, dir: tab.fillinDir, settings: overrideSettingsBody(tab, settings) },
+      { phase: "draft", error: undefined, writeConfirmed: false },
       {
-        phase: (d) => updateTab(tab.id, { phase: d.phase }),
-        done: (d) => {
+        done: (data) => {
           try {
-            const raw = d.text.trim();
+            /* Accept JSON wrapped in model prose by extracting the outer array first. */
+            const raw = data.text.trim();
             const firstBracket = raw.indexOf('[');
             const lastBracket = raw.lastIndexOf(']');
             if (firstBracket === -1 || lastBracket === -1) throw new Error("Invalid JSON returned");
@@ -577,49 +400,36 @@ export function App() {
             updateTab(tab.id, { phase: "error", error: "Failed to parse questions: " + err.message });
           }
         },
-        error: (d) => updateTab(tab.id, { phase: "error", error: d.message }),
-      },
-      controller.signal
-    ).catch((e) => {
-      if (!controller.signal.aborted) updateTab(tab.id, { phase: "error", error: String(e) });
-    }).finally(() => controllers.current.delete(tab.id));
+      }
+    );
   };
 
+  /* Streams a proposed answer into just the selected fill-in question. */
   const runFillinWrite = (tab: Tab, questionId: string) => {
     if (!settings) return;
     const q = tab.fillinQuestions?.find(x => x.id === questionId);
     if (!q) return;
-    
-    controllers.current.get(tab.id)?.abort();
-    const controller = new AbortController();
-    controllers.current.set(tab.id, controller);
-    
-    updateTab(tab.id, (t) => ({
-      phase: "draft", error: undefined, writeConfirmed: false,
-      fillinQuestions: t.fillinQuestions?.map(xq => xq.id === questionId ? { ...xq, preview: "" } : xq)
-    }));
-    const overrideBody = overrideSettingsBody(tab, settings);
-    
-    streamPost(
-      `/api/tabs/${tab.id}/fillin-write`,
-      { question: q.question, answer: q.answer, targetPath: q.targetPath, skills: tab.skills, settings: overrideBody },
+    runWriterStream(
+      tab,
+      "fillin-write",
+      { question: q.question, answer: q.answer, targetPath: q.targetPath, skills: tab.skills, settings: overrideSettingsBody(tab, settings) },
+      (current) => ({
+        phase: "draft", error: undefined, writeConfirmed: false,
+        fillinQuestions: current.fillinQuestions?.map(xq => xq.id === questionId ? { ...xq, preview: "" } : xq)
+      }),
       {
-        phase: (d) => updateTab(tab.id, { phase: d.phase }),
-        text: (d) => updateTab(tab.id, (t) => ({
-          fillinQuestions: t.fillinQuestions?.map(xq => xq.id === questionId ? { ...xq, preview: (xq.preview || "") + d.delta } : xq)
+        text: (data) => updateTab(tab.id, (current) => ({
+          fillinQuestions: current.fillinQuestions?.map(xq => xq.id === questionId ? { ...xq, preview: (xq.preview || "") + data.delta } : xq)
         })),
-        done: (d) => updateTab(tab.id, (t) => ({
+        done: (data) => updateTab(tab.id, (current) => ({
           phase: "done",
-          fillinQuestions: t.fillinQuestions?.map(xq => xq.id === questionId ? { ...xq, preview: d.text } : xq)
+          fillinQuestions: current.fillinQuestions?.map(xq => xq.id === questionId ? { ...xq, preview: data.text } : xq)
         })),
-        error: (d) => updateTab(tab.id, { phase: "error", error: d.message }),
-      },
-      controller.signal
-    ).catch((e) => {
-      if (!controller.signal.aborted) updateTab(tab.id, { phase: "error", error: String(e) });
-    }).finally(() => controllers.current.delete(tab.id));
+      }
+    );
   };
 
+  /* Writes an approved fill-in preview to disk and marks only that question complete. */
   const confirmFillinWrite = async (tab: Tab, questionId: string) => {
     const q = tab.fillinQuestions?.find(x => x.id === questionId);
     if (!q || !q.targetPath || !q.preview) return;
@@ -636,30 +446,22 @@ export function App() {
     }
   };
 
+  /* Sends a writer draft through the formatting and clarity cleanup pass. */
   const runWriteCleanup = (tab: Tab) => {
     if (!settings) return;
-    controllers.current.get(tab.id)?.abort();
-    const controller = new AbortController();
-    controllers.current.set(tab.id, controller);
-    
-    updateTab(tab.id, { phase: "cleanup", error: undefined, writePreview: "", writeConfirmed: false });
-    const overrideBody = overrideSettingsBody(tab, settings);
-    
-    streamPost(
-      `/api/tabs/${tab.id}/write-cleanup`,
-      { text: tab.writeInput, skills: tab.skills, settings: overrideBody },
+    runWriterStream(
+      tab,
+      "write-cleanup",
+      { text: tab.writeInput, skills: tab.skills, settings: overrideSettingsBody(tab, settings) },
+      { phase: "cleanup", error: undefined, writePreview: "", writeConfirmed: false },
       {
-        phase: (d) => updateTab(tab.id, { phase: d.phase }),
-        text: (d) => updateTab(tab.id, (t) => ({ writePreview: (t.writePreview || "") + d.delta })),
-        done: (d) => updateTab(tab.id, { phase: "done", writePreview: d.text }),
-        error: (d) => updateTab(tab.id, { phase: "error", error: d.message }),
-      },
-      controller.signal
-    ).catch((e) => {
-      if (!controller.signal.aborted) updateTab(tab.id, { phase: "error", error: String(e) });
-    }).finally(() => controllers.current.delete(tab.id));
+        text: (data) => updateTab(tab.id, (current) => ({ writePreview: (current.writePreview || "") + data.delta })),
+        done: (data) => updateTab(tab.id, { phase: "done", writePreview: data.text }),
+      }
+    );
   };
 
+  /* Persists the approved preview, or the raw input when no preview is present. */
   const confirmWrite = async (tab: Tab) => {
     if (!tab.writePath) return;
     const content = tab.writePreview || tab.writeInput;
@@ -679,6 +481,7 @@ export function App() {
     tabs.find((t) => t.id === rightId) ?? tabs.find((t) => t.id !== active?.id) ?? active;
 
   // Patch a tab by id; live-rename it from content while it is still auto-named.
+  /* Updates a tab and refreshes its local title while it remains automatically named. */
   const patchTab = (id: string, patch: Partial<Tab>) => {
     updateTab(id, (t) => {
       const next: Partial<Tab> = { ...patch };
@@ -694,6 +497,7 @@ export function App() {
   };
 
   // Open the second pane; seed it with a tab other than the active one.
+  /* Toggles split view and ensures the right pane never points at the active left tab. */
   const toggleSplit = () => {
     setSplit((s) => !s);
     setRightId((prev) => {
@@ -723,6 +527,7 @@ export function App() {
     error: "error",
   };
 
+  /* Supplies one tab and its callbacks to either the primary or secondary pane. */
   const renderPane = (paneTab: Tab) => (
     <TabView
       key={paneTab.id}

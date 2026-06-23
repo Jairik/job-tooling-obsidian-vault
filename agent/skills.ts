@@ -1,16 +1,15 @@
-// Discover and create Claude Code "skills" (SKILL.md folders) in either the user
-// scope (~/.claude/skills) or the vault/project scope (<vault>/.claude/skills).
-// Skills are surfaced in the UI so the user can pick which to apply per vault
-// interaction, and can author new ones from Settings.
+/* Discovers and creates Claude Code skills in user and vault-local SKILL.md folders. */
 import { homedir } from "os";
 import { join, resolve } from "path";
 import { readdirSync, readFileSync } from "fs";
 import { mkdir, writeFile } from "fs/promises";
 
+/* Returns false instead of throwing when an optional filesystem path is absent. */
 async function exists(path: string): Promise<boolean> {
   return await Bun.file(path).exists();
 }
 
+/* Checks both configured skill scopes for a particular skill directory. */
 async function hasSkill(name: string, vaultDir: string): Promise<boolean> {
   const candidates = [
     join(homedir(), ".claude", "skills", name, "SKILL.md"),
@@ -29,6 +28,7 @@ export interface SkillStatus {
 // Only the humanizer skill still gets special treatment (it drives the dedicated
 // humanize pass + the "Clean up" button). Every other skill is selected through
 // the general skills picker, so it doesn't need a hardcoded flag here.
+/* Reports availability of the skill with dedicated application behavior. */
 export async function detectSkills(vaultDir: string): Promise<SkillStatus> {
   return {
     humanizer: await hasSkill("humanizer", vaultDir),
@@ -46,6 +46,7 @@ export interface SkillInfo {
 
 const SKILL_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
 
+/* Resolves the filesystem root for global or vault-local skills. */
 function skillsRoot(scope: SkillScope, vaultDir: string): string {
   return scope === "vault"
     ? join(vaultDir, ".claude", "skills")
@@ -55,6 +56,7 @@ function skillsRoot(scope: SkillScope, vaultDir: string): string {
 // Pull `name` and `description` out of a SKILL.md's YAML frontmatter. Handles the
 // single-line form (`description: ...`) and the block form (`description: |`),
 // collapsing either into a one-line summary. Falls back to the directory name.
+/* Extracts optional YAML metadata while accepting plain Markdown skill files. */
 function parseFrontmatter(md: string, fallbackName: string): { name: string; description: string } {
   let name = fallbackName;
   let description = "";
@@ -93,6 +95,7 @@ function parseFrontmatter(md: string, fallbackName: string): { name: string; des
   return { name, description };
 }
 
+/* Reads each direct skill folder in one scope and returns its parsed metadata. */
 function scanScope(scope: SkillScope, vaultDir: string): SkillInfo[] {
   const root = skillsRoot(scope, vaultDir);
   const found: SkillInfo[] = [];
@@ -120,6 +123,7 @@ function scanScope(scope: SkillScope, vaultDir: string): SkillInfo[] {
 
 // List every installed skill across user + vault scope. User scope is scanned
 // first; a vault skill sharing a name is dropped so each name appears once.
+/* Lists both scopes, allowing a vault-local skill to override a global duplicate. */
 export async function listSkills(vaultDir: string): Promise<SkillInfo[]> {
   const all = [...scanScope("user", vaultDir), ...scanScope("vault", vaultDir)];
   const byName = new Map<string, SkillInfo>();
@@ -148,6 +152,7 @@ export interface CreateSkillResult {
 // Scaffold a new skill at <scope-root>/<name>/SKILL.md with YAML frontmatter and
 // the supplied instructions. Validates the name (kebab-case, no traversal),
 // enforces the target stays under the scope root, and refuses to overwrite.
+/* Validates user input and creates a SKILL.md file in the selected scope. */
 export async function createSkill(args: CreateSkillArgs): Promise<CreateSkillResult> {
   const name = (args.name || "").trim().toLowerCase();
   if (!SKILL_NAME_RE.test(name)) {

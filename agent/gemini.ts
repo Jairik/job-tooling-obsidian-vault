@@ -1,16 +1,19 @@
-// CLI engine driver: shells out to agy, opencode, cursor, copilot, or codex CLIs.
-//
-// SAFETY: All CLI agents are run inside throwaway sandboxed temp directories,
-// with appropriate sandboxing/safety/yolo flags as supported by each tool,
-// and we inject the vault context into the prompt ourselves (read-only)
-// so the CLI agents never need direct vault filesystem access.
+/*
+ * CLI engine driver for agy, OpenCode, Cursor, Copilot, and Codex.
+ *
+ * Safety: every CLI agent runs in a throwaway sandboxed directory. Vault content
+ * is injected into the prompt as read-only text, so the CLI never needs access
+ * to the user's vault filesystem.
+ */
 import { mkdtemp, rm, readdir, readFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join, extname } from "path";
-import { effectiveEngineModel, effectiveEngineReasoning, type Engine, type Settings } from "./config";
+import { effectiveEngineModel, effectiveEngineReasoning, type Engine } from "../shared/settings";
+import type { ServerSettings } from "./config";
 
-export type Emit = (event: string, data: unknown) => void;
+type Emit = (event: string, data: unknown) => void;
 
+/* Reports whether an engine is available on PATH; Claude is handled by its SDK. */
 export function cliAvailable(engine: Engine): boolean {
   if (engine === "claude") return true; // managed via SDK
   if (engine === "gemini") return Boolean(Bun.which("agy"));
@@ -21,6 +24,7 @@ export function cliAvailable(engine: Engine): boolean {
   return false;
 }
 
+/* Retains the Gemini-specific availability check used by older API callers. */
 export function geminiAvailable(): boolean {
   return cliAvailable("gemini");
 }
@@ -28,14 +32,17 @@ export function geminiAvailable(): boolean {
 const CONTEXT_EXTS = new Set([".md", ".txt"]);
 const CONTEXT_SKIP = new Set([".git", ".obsidian", "node_modules", ".trash"]);
 
-// Read-only: concatenate the vault's markdown/text files into a bounded context
-// bundle so CLIs can stay sandboxed in a temp dir with no access to the vault.
+/*
+ * Concatenates vault markdown/text files into a bounded, read-only context bundle.
+ * CLI engines receive this text while remaining sandboxed without vault access.
+ */
 export async function gatherVaultContext(
   vaultDir: string,
   extraDirs: string[] = [],
   maxBytes = 150_000
 ): Promise<string> {
   const files: string[] = [];
+  /* Recursively collects eligible text files while enforcing a shallow traversal limit. */
   async function walk(dir: string, depth: number): Promise<void> {
     if (depth > 5) return;
     let entries;
@@ -80,7 +87,7 @@ interface CliArgs {
   phase: string;
   emit: Emit;
   abort: AbortController;
-  settings?: Settings;
+  settings?: ServerSettings;
 }
 
 export interface CliCommand {
@@ -91,16 +98,22 @@ export interface CliCommand {
 
 export const CLI_ARG_PROMPT_SOFT_LIMIT_BYTES = 512_000;
 
+/* Adds a portable reasoning instruction for CLIs without a dedicated setting. */
 function withRuntimeHints(prompt: string, reasoning: string): string {
   if (!reasoning.trim()) return prompt;
   return `Reasoning effort: ${reasoning.trim()}. Use this as an internal budget and return only the final answer.\n\n${prompt}`;
 }
 
+/* Escapes a string for Codex's TOML-style --config command-line value. */
 function tomlString(value: string): string {
   return JSON.stringify(value);
 }
 
-export function buildCliCommand(engine: Engine, args: { prompt: string; settings?: Settings }): CliCommand {
+/*
+ * Builds the safe command and input transport for one external CLI.
+ * Prompts use stdin whenever possible so large vault context never exceeds argv limits.
+ */
+export function buildCliCommand(engine: Engine, args: { prompt: string; settings?: ServerSettings }): CliCommand {
   const model = args.settings ? effectiveEngineModel(args.settings, engine) : "";
   const reasoning = args.settings ? effectiveEngineReasoning(args.settings, engine) : "";
   const prompt = withRuntimeHints(args.prompt, reasoning);
@@ -147,6 +160,7 @@ export function buildCliCommand(engine: Engine, args: { prompt: string; settings
     throw new Error(`Unsupported CLI engine: ${engine}`);
   }
 
+  /* Fail before spawning an argv-only CLI with a command its OS cannot accept. */
   if (!writeToStdin && new TextEncoder().encode(prompt).length > CLI_ARG_PROMPT_SOFT_LIMIT_BYTES) {
     throw new Error(
       `${engine} prompt is too large for argv transport (${prompt.length} chars). Lower the context budget or use an engine that accepts stdin.`
@@ -156,8 +170,10 @@ export function buildCliCommand(engine: Engine, args: { prompt: string; settings
   return { cmd, prompt, writeToStdin };
 }
 
-// Run one CLI engine turn inside a sandboxed temp dir. Streams stdout chunks as
-// text deltas; returns the full printed response. Throws on non-zero exit.
+/*
+ * Runs one external CLI in a sandboxed temporary directory.
+ * Streams stdout chunks as text deltas, returns the full response, and throws on failure.
+ */
 export async function runCliTurn(engine: Engine, args: CliArgs): Promise<string> {
   const { cmd, prompt, writeToStdin } = buildCliCommand(engine, args);
 
@@ -201,8 +217,4 @@ export async function runCliTurn(engine: Engine, args: CliArgs): Promise<string>
   }
 
   return text.trim();
-}
-
-export async function runAgyTurn(args: CliArgs): Promise<string> {
-  return runCliTurn("gemini", args);
 }

@@ -1,24 +1,11 @@
 // Tiny API client. Streaming endpoints are POST + SSE, so we read the response
 // body manually (EventSource only supports GET).
 import type { SkillInfo, LogEntry } from "./store";
-
-// A single rolling usage window (0–100% of the limit used, plus its reset time).
-export interface UsageWindow {
-  utilization: number;
-  resetsAt: string | null;
-}
-
-export interface UsageResult {
-  ok: boolean;
-  error?: string;
-  fiveHour?: UsageWindow;
-  sevenDay?: UsageWindow;
-  sevenDayOpus?: UsageWindow;
-  extraUsage?: { enabled: boolean; utilization: number | null };
-}
+import type { UsageResult } from "../../shared/usage";
 
 export type SSEHandlers = Record<string, (data: any) => void>;
 
+/* Parses one complete Server-Sent Event frame into its event name and JSON payload. */
 function parseEvent(chunk: string): { event: string; data: any } | null {
   let event = "message";
   const dataLines: string[] = [];
@@ -35,6 +22,7 @@ function parseEvent(chunk: string): { event: string; data: any } | null {
   }
 }
 
+/* Posts JSON and incrementally forwards the response's SSE events to matching handlers. */
 export async function streamPost(
   url: string,
   body: unknown,
@@ -72,6 +60,7 @@ export interface ModelOption {
   label: string;
 }
 
+/* Named wrappers for each non-streaming server endpoint used by React components. */
 export const api = {
   meta: (): Promise<{ models: ModelOption[]; engines: ModelOption[]; defaults: any }> =>
     fetch("/api/meta").then((r) => r.json()),
@@ -103,10 +92,10 @@ export const api = {
     fetch(`/api/vault/validate?path=${encodeURIComponent(path)}`).then((r) => r.json()),
   cancel: (id: string): Promise<unknown> => fetch(`/api/tabs/${id}/cancel`, { method: "POST" }),
 
-  // Current Claude Code usage (mirrors the CLI's /usage command).
+  /* Current Claude Code usage, mirroring the CLI's `/usage` command. */
   usage: (): Promise<UsageResult> => fetch("/api/usage").then((r) => r.json()),
 
-  // Durable activity log persisted server-side to a local file.
+  /* Durable activity log persisted server-side to a local file. */
   getLogs: (): Promise<LogEntry[]> => fetch("/api/logs").then((r) => r.json()),
   appendLog: (entry: LogEntry): Promise<unknown> =>
     fetch("/api/logs", {
@@ -116,7 +105,7 @@ export const api = {
     }),
   clearLogs: (): Promise<unknown> => fetch("/api/logs", { method: "DELETE" }),
 
-  // Vault Writer APIs
+  /* Vault Writer file browsing, writing, and URL-import endpoints. */
   vaultTree: (vault: string): Promise<any[]> =>
     fetch(`/api/vault/tree?path=${encodeURIComponent(vault)}`).then((r) => r.json()),
   vaultWrite: (path: string, content: string): Promise<{ ok: boolean; path: string }> =>

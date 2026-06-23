@@ -6,76 +6,77 @@
    ────────────────────────────────────────────────────────────────────────── */
 
 :root {
-  /* Dark is the app's default identity. Light is opt-in via [data-theme="light"]. */
-  --bg:          oklch(16% 0.014 255);
-  --surface:     oklch(21% 0.014 255);
-  --surface-2:   oklch(25% 0.014 255);
-  --elevated:    oklch(23% 0.014 255);
-  --fg:          oklch(94% 0.006 255);
-  --muted:       oklch(70% 0.012 255);
-  --border:      oklch(34% 0.012 255);
+  /* Modern Dark Theme (Neutral, High Contrast) */
+  --bg:          oklch(18% 0.002 250);
+  --surface:     oklch(22% 0.002 250);
+  --surface-2:   oklch(26% 0.002 250);
+  --elevated:    oklch(24% 0.002 250);
+  --fg:          oklch(96% 0.002 250);
+  --muted:       oklch(70% 0.005 250);
+  --border:      oklch(32% 0.005 250);
 
-  --accent:        oklch(72% 0.13 255);   /* reads on dark — ~#6ea8fe */
-  --accent-strong: oklch(58% 0.18 255);   /* primary fills */
-  --on-accent:     oklch(98% 0.01 255);
+  --accent:        oklch(75% 0.12 250);
+  --accent-strong: oklch(62% 0.16 250);
+  --on-accent:     oklch(98% 0.01 250);
 
-  --success: oklch(74% 0.16 150);
-  --warning: oklch(80% 0.15 85);
-  --danger:  oklch(66% 0.20 25);
+  --success: oklch(75% 0.15 150);
+  --warning: oklch(82% 0.14 80);
+  --danger:  oklch(70% 0.18 25);
 
-  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", system-ui, sans-serif;
-  --font-body:    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, system-ui, sans-serif;
-  --font-mono:    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --font-display: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", system-ui, sans-serif;
+  --font-body:    "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, system-ui, sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 
-  --radius-1: 10px;
-  --radius-2: 16px;
-  --radius-pill: 999px;
+  --radius-1: 8px;
+  --radius-2: 12px;
+  --radius-lg: 16px;
+  --radius-pill: 9999px;
 
-  --shadow-1: 0 1px 0 rgba(0,0,0,0.20), 0 14px 40px rgba(0,0,0,0.38);
-  --shadow-card: 0 1px 0 color-mix(in oklch, var(--fg) 5%, transparent),
-                 0 12px 30px -18px color-mix(in oklch, black 60%, transparent);
+  --shadow-1: 0 2px 8px -2px rgba(0,0,0,0.25);
+  --shadow-card: 0 4px 12px -4px rgba(0,0,0,0.3);
 
-  --ring: 4px;
-  --ring-color: color-mix(in oklch, var(--accent) 24%, transparent);
+  --ring: 3px;
+  --ring-color: color-mix(in oklch, var(--accent) 30%, transparent);
 
-  --space-1: 6px;
-  --space-2: 10px;
-  --space-3: 14px;
-  --space-4: 18px;
-  --space-5: 26px;
-  --space-6: 36px;
+  --space-1: 8px;
+  --space-2: 12px;
+  --space-3: 16px;
+  --space-4: 24px;
+  --space-5: 32px;
+  --space-6: 48px;
 
-  --titlebar-h: 56px;
-  --statusbar-h: 26px;
+  --titlebar-h: 60px;
+  --statusbar-h: 30px;
 
-  --fs-0: 11px;
-  --fs-1: 12px;
-  --fs-2: 13px;
-  --fs-3: 14px;
-  --fs-4: 16px;
+  --fs-0: 12px;
+  --fs-1: 13px;
+  --fs-2: 14px;
+  --fs-3: 15px;
+  --fs-4: 18px;
 
   color-scheme: dark;
 }
 
 :root[data-theme="light"] {
-  --bg:          oklch(98.5% 0.003 250);
+  /* Modern Light Theme (Clean, Soft Borders) */
+  --bg:          oklch(99% 0.001 250);
   --surface:     oklch(100% 0 0);
-  --surface-2:   oklch(96.5% 0.004 250);
-  --elevated:    oklch(99% 0.002 250);
-  --fg:          oklch(22% 0.012 250);
-  --muted:       oklch(50% 0.012 250);
-  --border:      oklch(91% 0.005 250);
+  --surface-2:   oklch(97% 0.002 250);
+  --elevated:    oklch(100% 0 0);
+  --fg:          oklch(20% 0.005 250);
+  --muted:       oklch(55% 0.005 250);
+  --border:      oklch(90% 0.005 250);
 
-  --accent:        oklch(56% 0.17 255);
-  --accent-strong: oklch(56% 0.18 255);
-  --on-accent:     oklch(99% 0.01 255);
+  --accent:        oklch(58% 0.18 250);
+  --accent-strong: oklch(50% 0.20 250);
+  --on-accent:     oklch(100% 0 0);
 
-  --success: oklch(60% 0.16 150);
-  --warning: oklch(70% 0.15 85);
-  --danger:  oklch(57% 0.20 25);
+  --success: oklch(55% 0.18 145);
+  --warning: oklch(65% 0.18 75);
+  --danger:  oklch(55% 0.22 25);
 
-  --shadow-1: 0 1px 0 rgba(0,0,0,0.04), 0 14px 40px rgba(0,0,0,0.10);
-  --shadow-card: 0 1px 0 rgba(0,0,0,0.03), 0 12px 30px -20px rgba(20,30,60,0.30);
+  --shadow-1: 0 2px 8px -2px rgba(0,0,0,0.06);
+  --shadow-card: 0 4px 12px -4px rgba(0,0,0,0.08);
 
   color-scheme: light;
 }
@@ -254,10 +255,7 @@ body {
   font-size: var(--fs-3);
   line-height: 1.5;
   color: var(--fg);
-  background:
-    radial-gradient(1000px 520px at 6% -12%, color-mix(in oklch, var(--accent) 14%, transparent), transparent 70%),
-    radial-gradient(1000px 520px at 96% -14%, color-mix(in oklch, var(--success) 10%, transparent), transparent 66%),
-    var(--bg);
+  background: var(--bg);
   background-attachment: fixed;
   -webkit-font-smoothing: antialiased;
 }

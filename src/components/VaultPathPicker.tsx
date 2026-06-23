@@ -19,6 +19,7 @@ interface VaultPathPickerProps {
   placeholder?: string;
 }
 
+/* Browses the server-provided vault tree and returns a selected directory or file path. */
 export function VaultPathPicker({ vaultDir, value, onChange, allowNewFile, placeholder = "Select a directory..." }: VaultPathPickerProps) {
   const [open, setOpen] = useState(false);
   const [tree, setTree] = useState<TreeNode[]>([]);

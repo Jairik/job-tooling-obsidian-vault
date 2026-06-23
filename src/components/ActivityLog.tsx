@@ -19,6 +19,7 @@ const TOOL_VERB: Record<string, string> = {
   RAG: "Retrieved",
 };
 
+/* Displays compact tool activity emitted while a model turn is in progress. */
 export function ActivityLog({ activity }: { activity: Activity[] }) {
   const [open, setOpen] = useState(false);
   if (!activity.length) return null;

@@ -3,9 +3,11 @@
 // fetches on demand (button click) from /api/usage, which reads Claude Code's
 // local OAuth token. Only rendered for the Claude engine.
 import { useState } from "react";
-import { api, type UsageResult, type UsageWindow } from "../lib/api";
+import { api } from "../lib/api";
+import type { UsageResult, UsageWindow } from "../../shared/usage";
 
 // "resets in 3h 12m" / "resets in 2d 4h" from an ISO timestamp.
+/* Turns the API's reset timestamp into a short, user-friendly local time. */
 function fmtReset(resetsAt: string | null): string {
   if (!resetsAt) return "";
   const ms = new Date(resetsAt).getTime() - Date.now();
@@ -19,6 +21,7 @@ function fmtReset(resetsAt: string | null): string {
   return `resets in ${parts.join(" ")}`;
 }
 
+/* Renders one bounded quota bar, including its next reset time. */
 function UsageBar({ label, win }: { label: string; win: UsageWindow }) {
   const pct = Math.max(0, Math.min(100, win.utilization));
   const tone = pct >= 90 ? "bad" : pct >= 75 ? "warn" : "ok";
@@ -36,10 +39,12 @@ function UsageBar({ label, win }: { label: string; win: UsageWindow }) {
   );
 }
 
+/* Fetches and presents Claude subscription quota without exposing credentials. */
 export function UsagePanel() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<UsageResult | null>(null);
 
+  /* Refreshes quota data and retains a readable error if the local login is unavailable. */
   const check = async () => {
     setLoading(true);
     try {

@@ -24,6 +24,7 @@ interface MenuPos {
   bottom?: number;
 }
 
+/* Lets callers choose a deduplicated set of installed skills for a tab request. */
 export function SkillPicker({ availableSkills, selected, onChange, title }: Props) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);

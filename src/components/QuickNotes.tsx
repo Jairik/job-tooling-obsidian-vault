@@ -64,10 +64,12 @@ const ICONS: Record<string, ReactElement> = {
 
 const ICON_ORDER = ["github", "linkedin", "globe", "mail", "x", "doc", "link"];
 
+/* Resolves a small inline icon name to the matching Unicode symbol. */
 function Icon({ name }: { name: string }) {
   return ICONS[name] ?? ICONS.link;
 }
 
+/* Renders an editable, locally persisted scratchpad for links, contacts, and notes. */
 export function QuickNotes({ onClose }: Props) {
   const [qn, setQn] = useState<QN>(() => loadQuickNotes());
   const [copied, setCopied] = useState<string | null>(null);
@@ -76,6 +78,7 @@ export function QuickNotes({ onClose }: Props) {
     saveQuickNotes(qn);
   }, [qn]);
 
+  /* Copies one field and tracks which control should display the confirmation state. */
   const copy = async (id: string, text: string) => {
     const value = text.trim();
     if (!value) return;
@@ -89,9 +92,11 @@ export function QuickNotes({ onClose }: Props) {
   };
 
   // ── Links ──────────────────────────────────────────────────────────────
+  /* Applies one targeted edit without rebuilding unrelated quick-note entries. */
   const patchLink = (id: string, patch: Partial<QN["links"][number]>) =>
     setQn((q) => ({ ...q, links: q.links.map((l) => (l.id === id ? { ...l, ...patch } : l)) }));
 
+  /* Rotates through the supported icon set for a saved link. */
   const cycleIcon = (id: string) =>
     setQn((q) => ({
       ...q,
@@ -102,10 +107,12 @@ export function QuickNotes({ onClose }: Props) {
       ),
     }));
 
+  /* Adds a blank link record that the user can edit in place. */
   const addLink = () =>
     setQn((q) => ({ ...q, links: [...q.links, { id: uid(), icon: "link", label: "New link", value: "" }] }));
 
   // ── References (real people) ─────────────────────────────────────────────
+  /* Updates one reference contact while preserving the rest of the list. */
   const patchRef = (id: string, patch: Partial<QN["references"][number]>) =>
     setQn((q) => ({
       ...q,
@@ -113,9 +120,11 @@ export function QuickNotes({ onClose }: Props) {
     }));
 
   // ── Boxes ──────────────────────────────────────────────────────────────
+  /* Updates one free-form notes box without replacing other boxes. */
   const patchBox = (id: string, patch: Partial<QN["boxes"][number]>) =>
     setQn((q) => ({ ...q, boxes: q.boxes.map((b) => (b.id === id ? { ...b, ...patch } : b)) }));
 
+  /* Adds an empty free-form notes box. */
   const addBox = () =>
     setQn((q) => ({ ...q, boxes: [...q.boxes, { id: uid(), label: "New box", value: "" }] }));
 

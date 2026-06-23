@@ -6,10 +6,7 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { join } from "path";
 import {
-  DEFAULT_MODEL,
-  DEFAULT_CLEANUP_MODEL,
   claudeReasoningTokens,
-  effectiveEngineModel,
   ASK_PERSONA,
   buildAppend,
   buildDraftPrompt,
@@ -30,10 +27,10 @@ import {
   buildFillinAnswerPrompt,
   buildWriteCleanupPrompt,
   buildSkillsNote,
-  type Settings,
-  type TabMode,
   type SkillNote,
 } from "./config";
+import { DEFAULT_CLAUDE_MODEL, DEFAULT_CLEANUP_MODEL, effectiveEngineModel, type TabMode } from "../shared/settings";
+import type { ServerSettings } from "./config";
 import { detectSkills, listSkills } from "./skills";
 import { cliAvailable, runCliTurn, gatherVaultContext } from "./gemini";
 import { retrieveContext } from "./rag";
@@ -44,7 +41,7 @@ const DEFAULT_TOOLS = ["Skill", "Read", "Grep", "Glob"];
 // keeps token usage down: no autonomous Read/Grep/Glob over the whole vault.
 const RAG_TOOLS = ["Skill"];
 
-export type Emit = (event: string, data: unknown) => void;
+type Emit = (event: string, data: unknown) => void;
 
 interface TabSession {
   sessionId?: string;
@@ -55,6 +52,7 @@ interface TabSession {
 const sessions = new Map<string, TabSession>();
 const SESS_PATH = join(import.meta.dir, "..", ".sessions.json");
 
+/* Restores per-tab Claude session identifiers after a server restart. */
 export async function loadSessions(): Promise<void> {
   try {
     const obj = JSON.parse(await Bun.file(SESS_PATH).text());
@@ -66,21 +64,20 @@ export async function loadSessions(): Promise<void> {
   }
 }
 
+/* Writes the current session map so follow-up turns can resume conversations. */
 async function persistSessions(): Promise<void> {
   const obj: Record<string, string> = {};
   for (const [k, v] of sessions) if (v.sessionId) obj[k] = v.sessionId;
   await Bun.write(SESS_PATH, JSON.stringify(obj, null, 2));
 }
 
+/* Aborts the in-flight model request associated with a browser tab. */
 export function cancel(tabId: string): void {
   sessions.get(tabId)?.abort?.abort();
 }
 
-export function clearSession(tabId: string): void {
-  sessions.delete(tabId);
-  void persistSessions();
-}
 
+/* Reduces verbose SDK tool input to a short activity-log description. */
 function summarizeToolInput(name: string, input: any): string {
   if (!input || typeof input !== "object") return "";
   if (name === "Read") return input.file_path ?? "";
@@ -95,7 +92,7 @@ function summarizeToolInput(name: string, input: any): string {
 interface TurnArgs {
   prompt: string;
   resume?: string;
-  settings: Settings;
+  settings: ServerSettings;
   append: string;
   phase: string;
   allowedTools?: string[];
@@ -105,6 +102,7 @@ interface TurnArgs {
 
 // Run one query() turn. Streams text deltas + tool activity; returns the final
 // answer text and the (possibly new) session id.
+/* Runs one Claude SDK turn and relays its text and tool activity as SSE events. */
 async function runTurn(args: TurnArgs): Promise<{ text: string; sessionId?: string }> {
   let finalText = "";
   let streamed = "";
@@ -112,7 +110,7 @@ async function runTurn(args: TurnArgs): Promise<{ text: string; sessionId?: stri
 
   const options: any = {
     cwd: args.settings.vaultDir,
-    model: effectiveEngineModel(args.settings, "claude") || DEFAULT_MODEL,
+    model: effectiveEngineModel(args.settings, "claude") || DEFAULT_CLAUDE_MODEL,
     maxThinkingTokens: claudeReasoningTokens(args.settings),
     settingSources: ["user", "project"],
     allowedTools: args.allowedTools ?? DEFAULT_TOOLS,
@@ -158,7 +156,8 @@ async function runTurn(args: TurnArgs): Promise<{ text: string; sessionId?: stri
 // Retrieve relevant vault excerpts for a query and report them in the activity
 // log. Returns empty context when nothing matches (callers fall back to the
 // normal whole-vault path).
-async function retrieveForQuery(settings: Settings, query: string, emit: Emit): Promise<string> {
+/* Retrieves relevant vault excerpts only when RAG is enabled for the request. */
+async function retrieveForQuery(settings: ServerSettings, query: string, emit: Emit): Promise<string> {
   const r = await retrieveContext(settings.vaultDir, settings.extraDirs ?? [], query);
   if (!r.context) return "";
   emit("activity", {
@@ -174,8 +173,9 @@ async function retrieveForQuery(settings: Settings, query: string, emit: Emit): 
 // Resolve the user's selected skill names into prompt notes (name + description).
 // On CLI engines the Skill tool is unavailable, so any selection is skipped with
 // a notice; names that don't match an installed skill are reported and dropped.
+/* Resolves user-selected skill names into the descriptions required by prompt builders. */
 async function resolveSkillNotes(
-  settings: Settings,
+  settings: ServerSettings,
   names: string[] | undefined,
   isCliEngine: boolean,
   emit: Emit
@@ -204,6 +204,7 @@ async function resolveSkillNotes(
 
 // Ensure the Skill tool is allowed when skills are selected so the agent can
 // invoke them. `undefined` keeps the default tool set (which already has Skill).
+/* Adds the Skill tool only for turns that actually selected one or more skills. */
 function withSkillTool(tools: string[] | undefined, hasSkills: boolean): string[] | undefined {
   if (!hasSkills || tools === undefined) return tools;
   return tools.includes("Skill") ? tools : ["Skill", ...tools];
@@ -215,9 +216,10 @@ interface GenerateArgs {
   skills: string[];
   rag: boolean;
   mode: TabMode;
-  settings: Settings;
+  settings: ServerSettings;
 }
 
+/* Generates a new answer, including draft/humanize phases when configured. */
 export async function generate(tabId: string, args: GenerateArgs, emit: Emit): Promise<void> {
   const abort = new AbortController();
   sessions.set(tabId, { ...sessions.get(tabId), abort });
@@ -377,9 +379,10 @@ interface FollowUpArgs {
   skills: string[];
   rag: boolean;
   mode: TabMode;
-  settings: Settings;
+  settings: ServerSettings;
 }
 
+/* Revises the most recent answer using the follow-up text for a tab. */
 export async function followUp(tabId: string, args: FollowUpArgs, emit: Emit): Promise<void> {
   const prev = sessions.get(tabId);
   const abort = new AbortController();
@@ -438,13 +441,14 @@ export async function followUp(tabId: string, args: FollowUpArgs, emit: Emit): P
 interface CleanupArgs {
   text: string;
   skills: string[];
-  settings: Settings;
+  settings: ServerSettings;
 }
 
 // Polish the supplied answer text (grammar fix + humanize) with the lightweight
 // cleanup model. Runs a fresh, throwaway turn on the exact text passed in
 // (including any manual edits) — it does NOT resume the tab's conversation, and
 // it preserves the tab's real follow-up session id.
+/* Runs the standalone cleanup pass over an existing answer. */
 export async function cleanup(tabId: string, args: CleanupArgs, emit: Emit): Promise<void> {
   const prev = sessions.get(tabId);
   const abort = new AbortController();
@@ -479,7 +483,7 @@ export async function cleanup(tabId: string, args: CleanupArgs, emit: Emit): Pro
     if (out) cleaned = out;
   } else {
     // Lightweight: cleanup model + low reasoning, Skill tool only (no file browsing).
-    const cleanupSettings: Settings = {
+    const cleanupSettings: ServerSettings = {
       ...args.settings,
       model: args.settings.cleanupModel || DEFAULT_CLEANUP_MODEL,
       effort: "low",
@@ -504,19 +508,61 @@ export async function cleanup(tabId: string, args: CleanupArgs, emit: Emit): Pro
   emit("done", { text: cleaned, sessionId: prev?.sessionId });
 }
 
-export function hasSession(tabId: string): boolean {
-  return Boolean(sessions.get(tabId)?.sessionId);
-}
-
 // ── Vault Writer pipeline ───────────────────────────────────────────────────
 
 interface SummarizeArgs {
   input: string;
   isUrl: boolean;
   skills: string[];
-  settings: Settings;
+  settings: ServerSettings;
 }
 
+interface EngineTurnArgs {
+  settings: ServerSettings;
+  claudeSettings?: ServerSettings;
+  prompt: string;
+  append: string;
+  allowedTools: string[];
+  phase: string;
+  emit: Emit;
+  abort: AbortController;
+}
+
+// All Vault Writer actions share the same CLI-or-Claude dispatch. Keeping it in
+// one place prevents the two execution paths from slowly gaining different
+// availability checks, stream metadata, or model handling.
+/* Routes one Vault Writer prompt through Claude or the selected sandboxed CLI. */
+async function runWriterTurn({
+  settings,
+  claudeSettings = settings,
+  prompt,
+  append,
+  allowedTools,
+  phase,
+  emit,
+  abort,
+}: EngineTurnArgs): Promise<string | undefined> {
+  if (settings.engine !== "claude") {
+    if (!cliAvailable(settings.engine)) {
+      emit("error", { message: `The \`${settings.engine}\` CLI was not found on PATH.` });
+      return undefined;
+    }
+    return runCliTurn(settings.engine, { prompt, phase, emit, abort, settings });
+  }
+
+  const result = await runTurn({
+    prompt,
+    settings: claudeSettings,
+    append,
+    allowedTools,
+    phase,
+    emit,
+    abort,
+  });
+  return result.text;
+}
+
+/* Summarizes imported text into a vault-ready note. */
 export async function summarize(tabId: string, args: SummarizeArgs, emit: Emit): Promise<void> {
   const abort = new AbortController();
   sessions.set(tabId, { ...sessions.get(tabId), abort });
@@ -531,34 +577,18 @@ export async function summarize(tabId: string, args: SummarizeArgs, emit: Emit):
   const skillNotes = await resolveSkillNotes(args.settings, args.skills, isCliEngine, emit);
   let context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
 
-  let finalText = "";
-
-  if (isCliEngine) {
-    if (!cliAvailable(args.settings.engine)) {
-      emit("error", { message: `The \`${args.settings.engine}\` CLI was not found on PATH.` });
-      return;
-    }
-    finalText = await runCliTurn(args.settings.engine, {
-      prompt: buildSummarizePrompt(sourceText, context),
-      phase: "draft",
-      emit,
-      abort,
-      settings: args.settings,
-    });
-  } else {
-    const note = buildSkillsNote(skillNotes);
-    const baseAppend = "You are summarizing content for a personal knowledge vault. Produce clean, well-structured markdown.";
-    const r = await runTurn({
-      prompt: buildSummarizePrompt(sourceText, context),
-      settings: args.settings,
-      append: note ? `${baseAppend}\n\n${note}` : baseAppend,
-      allowedTools: ["Skill"],
-      phase: "draft",
-      emit,
-      abort,
-    });
-    finalText = r.text;
-  }
+  const note = buildSkillsNote(skillNotes);
+  const baseAppend = "You are summarizing content for a personal knowledge vault. Produce clean, well-structured markdown.";
+  const finalText = await runWriterTurn({
+    settings: args.settings,
+    prompt: buildSummarizePrompt(sourceText, context),
+    append: note ? `${baseAppend}\n\n${note}` : baseAppend,
+    allowedTools: ["Skill"],
+    phase: "draft",
+    emit,
+    abort,
+  });
+  if (finalText === undefined) return;
 
   sessions.set(tabId, { ...sessions.get(tabId), abort: undefined });
   emit("done", { text: finalText });
@@ -566,9 +596,10 @@ export async function summarize(tabId: string, args: SummarizeArgs, emit: Emit):
 
 interface AutoPlaceArgs {
   content: string;
-  settings: Settings;
+  settings: ServerSettings;
 }
 
+/* Suggests the vault path where generated content belongs. */
 export async function autoPlace(tabId: string, args: AutoPlaceArgs, emit: Emit): Promise<void> {
   const abort = new AbortController();
   sessions.set(tabId, { ...sessions.get(tabId), abort });
@@ -596,33 +627,17 @@ export async function autoPlace(tabId: string, args: AutoPlaceArgs, emit: Emit):
 
   const structure = listDirs(args.settings.vaultDir).join("\n");
 
-  const isCliEngine = args.settings.engine !== "claude";
-  let finalText = "";
-
-  if (isCliEngine) {
-    if (!cliAvailable(args.settings.engine)) {
-      emit("error", { message: `The \`${args.settings.engine}\` CLI was not found on PATH.` });
-      return;
-    }
-    finalText = await runCliTurn(args.settings.engine, {
-      prompt: buildAutoPlacePrompt(args.content, structure),
-      phase: "draft",
-      emit,
-      abort,
-      settings: args.settings,
-    });
-  } else {
-    const r = await runTurn({
-      prompt: buildAutoPlacePrompt(args.content, structure),
-      settings: { ...args.settings, effort: "low", engineReasoning: { ...(args.settings.engineReasoning ?? {}), claude: "low" } },
-      append: "Suggest the best file path in the vault for this content. Respond with ONLY the path.",
-      allowedTools: ["Skill"],
-      phase: "draft",
-      emit,
-      abort,
-    });
-    finalText = r.text;
-  }
+  const finalText = await runWriterTurn({
+    settings: args.settings,
+    claudeSettings: { ...args.settings, effort: "low", engineReasoning: { ...(args.settings.engineReasoning ?? {}), claude: "low" } },
+    prompt: buildAutoPlacePrompt(args.content, structure),
+    append: "Suggest the best file path in the vault for this content. Respond with ONLY the path.",
+    allowedTools: ["Skill"],
+    phase: "draft",
+    emit,
+    abort,
+  });
+  if (finalText === undefined) return;
 
   // Clean the response to just the path
   const suggestedPath = finalText.trim().split("\n")[0].trim().replace(/^["'`]+|["'`]+$/g, "");
@@ -633,9 +648,10 @@ export async function autoPlace(tabId: string, args: AutoPlaceArgs, emit: Emit):
 interface FillinScanArgs {
   prompt?: string;
   dir?: string;
-  settings: Settings;
+  settings: ServerSettings;
 }
 
+/* Finds prompts in the vault that need a generated answer. */
 export async function fillinScan(tabId: string, args: FillinScanArgs, emit: Emit): Promise<void> {
   const abort = new AbortController();
   sessions.set(tabId, { ...sessions.get(tabId), abort });
@@ -645,33 +661,16 @@ export async function fillinScan(tabId: string, args: FillinScanArgs, emit: Emit
   const scanDir = args.dir || args.settings.vaultDir;
   const context = await gatherVaultContext(scanDir, args.settings.extraDirs ?? []);
 
-  const isCliEngine = args.settings.engine !== "claude";
-  let finalText = "";
-
-  if (isCliEngine) {
-    if (!cliAvailable(args.settings.engine)) {
-      emit("error", { message: `The \`${args.settings.engine}\` CLI was not found on PATH.` });
-      return;
-    }
-    finalText = await runCliTurn(args.settings.engine, {
-      prompt: buildFillinScanPrompt(context, args.prompt),
-      phase: "draft",
-      emit,
-      abort,
-      settings: args.settings,
-    });
-  } else {
-    const r = await runTurn({
-      prompt: buildFillinScanPrompt(context, args.prompt),
-      settings: args.settings,
-      append: "Analyze the vault and return a JSON array of questions about missing information.",
-      allowedTools: ["Read", "Grep", "Glob"],
-      phase: "draft",
-      emit,
-      abort,
-    });
-    finalText = r.text;
-  }
+  const finalText = await runWriterTurn({
+    settings: args.settings,
+    prompt: buildFillinScanPrompt(context, args.prompt),
+    append: "Analyze the vault and return a JSON array of questions about missing information.",
+    allowedTools: ["Read", "Grep", "Glob"],
+    phase: "draft",
+    emit,
+    abort,
+  });
+  if (finalText === undefined) return;
 
   sessions.set(tabId, { ...sessions.get(tabId), abort: undefined });
   emit("done", { text: finalText });
@@ -682,9 +681,10 @@ interface FillinWriteArgs {
   answer: string;
   targetPath: string;
   skills: string[];
-  settings: Settings;
+  settings: ServerSettings;
 }
 
+/* Drafts an answer for one selected fill-in-the-blank question. */
 export async function fillinWrite(tabId: string, args: FillinWriteArgs, emit: Emit): Promise<void> {
   const abort = new AbortController();
   sessions.set(tabId, { ...sessions.get(tabId), abort });
@@ -695,34 +695,18 @@ export async function fillinWrite(tabId: string, args: FillinWriteArgs, emit: Em
 
   const isCliEngine = args.settings.engine !== "claude";
   const skillNotes = await resolveSkillNotes(args.settings, args.skills, isCliEngine, emit);
-  let finalText = "";
-
-  if (isCliEngine) {
-    if (!cliAvailable(args.settings.engine)) {
-      emit("error", { message: `The \`${args.settings.engine}\` CLI was not found on PATH.` });
-      return;
-    }
-    finalText = await runCliTurn(args.settings.engine, {
-      prompt: buildFillinAnswerPrompt(context, args.question, args.answer, args.targetPath),
-      phase: "draft",
-      emit,
-      abort,
-      settings: args.settings,
-    });
-  } else {
-    const note = buildSkillsNote(skillNotes);
-    const baseAppend = "Format the user's answer into clean vault markdown. Output ONLY the formatted content.";
-    const r = await runTurn({
-      prompt: buildFillinAnswerPrompt(context, args.question, args.answer, args.targetPath),
-      settings: args.settings,
-      append: note ? `${baseAppend}\n\n${note}` : baseAppend,
-      allowedTools: ["Skill"],
-      phase: "draft",
-      emit,
-      abort,
-    });
-    finalText = r.text;
-  }
+  const note = buildSkillsNote(skillNotes);
+  const baseAppend = "Format the user's answer into clean vault markdown. Output ONLY the formatted content.";
+  const finalText = await runWriterTurn({
+    settings: args.settings,
+    prompt: buildFillinAnswerPrompt(context, args.question, args.answer, args.targetPath),
+    append: note ? `${baseAppend}\n\n${note}` : baseAppend,
+    allowedTools: ["Skill"],
+    phase: "draft",
+    emit,
+    abort,
+  });
+  if (finalText === undefined) return;
 
   sessions.set(tabId, { ...sessions.get(tabId), abort: undefined });
   emit("done", { text: finalText });
@@ -731,9 +715,10 @@ export async function fillinWrite(tabId: string, args: FillinWriteArgs, emit: Em
 interface WriteCleanupArgs {
   text: string;
   skills: string[];
-  settings: Settings;
+  settings: ServerSettings;
 }
 
+/* Cleans a Vault Writer draft before it is written to disk. */
 export async function writeCleanup(tabId: string, args: WriteCleanupArgs, emit: Emit): Promise<void> {
   const abort = new AbortController();
   sessions.set(tabId, { ...sessions.get(tabId), abort });
@@ -742,41 +727,26 @@ export async function writeCleanup(tabId: string, args: WriteCleanupArgs, emit: 
 
   const isCliEngine = args.settings.engine !== "claude";
   const skillNotes = await resolveSkillNotes(args.settings, args.skills, isCliEngine, emit);
-  let finalText = args.text;
-
-  if (isCliEngine) {
-    if (!cliAvailable(args.settings.engine)) {
-      emit("error", { message: `The \`${args.settings.engine}\` CLI was not found on PATH.` });
-      return;
-    }
-    const out = await runCliTurn(args.settings.engine, {
-      prompt: buildWriteCleanupPrompt(args.text),
-      phase: "cleanup",
-      emit,
-      abort,
-      settings: args.settings,
-    });
-    if (out) finalText = out;
-  } else {
-    const note = buildSkillsNote(skillNotes);
-    const baseAppend = "Clean up and format the text into well-structured vault markdown.";
-    const r = await runTurn({
-      prompt: buildWriteCleanupPrompt(args.text),
-      settings: {
-        ...args.settings,
-        model: args.settings.cleanupModel || DEFAULT_CLEANUP_MODEL,
-        effort: "low",
-        engineModels: { ...(args.settings.engineModels ?? {}), claude: args.settings.cleanupModel || DEFAULT_CLEANUP_MODEL },
-        engineReasoning: { ...(args.settings.engineReasoning ?? {}), claude: "low" },
-      },
-      append: note ? `${baseAppend}\n\n${note}` : baseAppend,
-      allowedTools: ["Skill"],
-      phase: "cleanup",
-      emit,
-      abort,
-    });
-    if (r.text) finalText = r.text;
-  }
+  const note = buildSkillsNote(skillNotes);
+  const baseAppend = "Clean up and format the text into well-structured vault markdown.";
+  const output = await runWriterTurn({
+    settings: args.settings,
+    claudeSettings: {
+      ...args.settings,
+      model: args.settings.cleanupModel || DEFAULT_CLEANUP_MODEL,
+      effort: "low",
+      engineModels: { ...(args.settings.engineModels ?? {}), claude: args.settings.cleanupModel || DEFAULT_CLEANUP_MODEL },
+      engineReasoning: { ...(args.settings.engineReasoning ?? {}), claude: "low" },
+    },
+    prompt: buildWriteCleanupPrompt(args.text),
+    append: note ? `${baseAppend}\n\n${note}` : baseAppend,
+    allowedTools: ["Skill"],
+    phase: "cleanup",
+    emit,
+    abort,
+  });
+  if (output === undefined) return;
+  const finalText = output || args.text;
 
   sessions.set(tabId, { ...sessions.get(tabId), abort: undefined });
   emit("done", { text: finalText });
