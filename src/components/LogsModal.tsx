@@ -1,7 +1,7 @@
 // Logs modal: a read-only view over the local activity log (generations,
 // follow-ups, answers, tool calls, errors) — a chronological list plus a few
 // recharts summaries. onClear wipes the log; nothing here mutates it otherwise.
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ResponsiveContainer,
   BarChart,
@@ -113,22 +113,51 @@ export function LogsModal({ logs, onClear, onClose }: Props) {
 
   const empty = logs.length === 0;
 
-  return (
-    <div className="drawer-backdrop" onClick={onClose}>
-      <aside className="drawer logs" onClick={(e) => e.stopPropagation()}>
-        <div className="drawer-head">
-          <h2>Logs</h2>
-          <button className="icon-btn" title="Close" onClick={onClose}>
-            ×
-          </button>
-        </div>
-        <p className="drawer-sub">Recent activity, generated answers, and stats — stored locally on this device.</p>
+  // Drive the slide-in transition: mount off-screen, then add `.open` next frame.
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setOpen(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+  const handleClose = () => {
+    setOpen(false);
+    setTimeout(onClose, 200);
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") handleClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
+  return (
+    <div className={`logs-overlay ${open ? "open" : ""}`}>
+      <div className="logs-hd">
+        <div className="logs-hd-left">
+          <button className="icon-btn" onClick={handleClose} title="Back" aria-label="Back">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="15 18 9 12 15 6" />
+            </svg>
+          </button>
+          <span className="logs-title">Activity Logs</span>
+        </div>
+        <div className="logs-hd-right">
+          <span className="logs-sub">logs/activity.jsonl</span>
+          {!empty && (
+            <button className="btn-ghost" onClick={onClear}>
+              Clear logs
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="logs-body">
         {empty ? (
           <div className="log-empty">No activity yet. Generate an answer and it'll show up here.</div>
         ) : (
           <>
-            <section className="log-stats">
+            <section className="logs-stats">
               <div className="stat-card">
                 <span className="stat-num">{stats.events}</span>
                 <span className="stat-label">events</span>
@@ -241,15 +270,9 @@ export function LogsModal({ logs, onClear, onClose }: Props) {
                 </div>
               ))}
             </section>
-
-            <div className="log-footer">
-              <button className="btn btn-ghost" onClick={onClear}>
-                Clear logs
-              </button>
-            </div>
           </>
         )}
-      </aside>
+      </div>
     </div>
   );
 }

@@ -76,7 +76,7 @@ export function DesignSettingsSection({ design, onChange }: Props) {
           <input type="range" min={0.05} max={0.2} step={0.01} value={design.accentChroma} onChange={(event) => onChange({ accentChroma: Number(event.target.value) })} />
         </label>
 
-        <div className="color-swatch" style={{ background: `oklch(72% ${design.accentChroma} ${design.accentHue})` }} title="Accent color preview" />
+        <div className="color-swatch" style={{ background: "var(--accent)" }} title="Accent color preview" />
       </div>
 
       <div className="settings-section">
