@@ -9,7 +9,7 @@ import { mkdtemp, rm, readdir, readFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join, extname } from "path";
 import { effectiveEngineModel, effectiveEngineReasoning, type Engine } from "../shared/settings";
-import type { ServerSettings } from "./config";
+import { injectSkillsIntoPrompt, type ServerSettings, type SkillNote } from "./config";
 
 type Emit = (event: string, data: unknown) => void;
 
@@ -84,7 +84,13 @@ export async function gatherVaultContext(
 
 interface CliArgs {
   prompt: string;
+  // Full user-selected SKILL.md bundles. These are prompt-injected because CLI
+  // agents do not expose Claude's native Skill tool or shared skill directories.
+  skills?: SkillNote[];
   phase: string;
+  // Tool-protocol turns are held back until the mediator has either fulfilled a
+  // request or received a final answer, so raw JSON never leaks into the UI.
+  suppressText?: boolean;
   emit: Emit;
   abort: AbortController;
   settings?: ServerSettings;
@@ -113,10 +119,15 @@ function tomlString(value: string): string {
  * Builds the safe command and input transport for one external CLI.
  * Prompts use stdin whenever possible so large vault context never exceeds argv limits.
  */
-export function buildCliCommand(engine: Engine, args: { prompt: string; settings?: ServerSettings }): CliCommand {
+export function buildCliCommand(
+  engine: Engine,
+  args: { prompt: string; settings?: ServerSettings; skills?: SkillNote[] }
+): CliCommand {
   const model = args.settings ? effectiveEngineModel(args.settings, engine) : "";
   const reasoning = args.settings ? effectiveEngineReasoning(args.settings, engine) : "";
-  const prompt = withRuntimeHints(args.prompt, reasoning);
+  // Inject before runtime hints so every CLI command builder call, including
+  // future call sites, delivers the selected SKILL.md instructions consistently.
+  const prompt = withRuntimeHints(injectSkillsIntoPrompt(args.prompt, args.skills), reasoning);
   let bin = "";
   let cmd: string[] = [];
   let writeToStdin = false;
@@ -175,6 +186,8 @@ export function buildCliCommand(engine: Engine, args: { prompt: string; settings
  * Streams stdout chunks as text deltas, returns the full response, and throws on failure.
  */
 export async function runCliTurn(engine: Engine, args: CliArgs): Promise<string> {
+  // buildCliCommand performs the portable skill injection before choosing this
+  // engine's command line, so all CLI agents receive identical instructions.
   const { cmd, prompt, writeToStdin } = buildCliCommand(engine, args);
 
   // Isolated working directory
@@ -204,7 +217,7 @@ export async function runCliTurn(engine: Engine, args: CliArgs): Promise<string>
       if (done) break;
       const chunk = decoder.decode(value, { stream: true });
       text += chunk;
-      args.emit("text", { phase: args.phase, delta: chunk });
+      if (!args.suppressText) args.emit("text", { phase: args.phase, delta: chunk });
     }
     const code = await proc.exited;
     if (code !== 0 && !args.abort.signal.aborted) {

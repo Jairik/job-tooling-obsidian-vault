@@ -13,6 +13,9 @@ import {
   buildCliHumanizePrompt,
   buildCliCleanupPrompt,
   buildCliFollowupPrompt,
+  buildAppend,
+  buildSkillsNote,
+  injectSkillsIntoPrompt,
   buildSummarizePrompt,
   buildAutoPlacePrompt,
   buildFillinScanPrompt,
@@ -21,10 +24,12 @@ import {
   defaultSettings,
   normalizeServerSettings,
 } from "./config";
+import { loadSelectedSkills } from "./skills";
+import { buildWebResearchSkill, parseWebToolRequest, resolveWebPage, webResearchEnabled } from "./web";
 import { effectiveEngineModel, effectiveEngineReasoning } from "../shared/settings";
 import { defaultEngineModels, defaultEngineReasoning } from "../shared/settings";
 import { normalizeSettings as normalizeClientSettings } from "../src/lib/store";
-import { mkdtemp, rm, writeFile } from "fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -53,6 +58,46 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
     expect(context).toContain("Hello vault content!");
 
     await rm(tempDir, { recursive: true, force: true });
+  });
+
+  test("embeds each selected SKILL.md for Claude and every CLI engine", async () => {
+    const vaultDir = await mkdtemp(join(tmpdir(), "jas-skills-test-"));
+    const skillDir = join(vaultDir, ".claude", "skills", "portable-review");
+    const skillPath = join(skillDir, "SKILL.md");
+    const instructions = "# Portable review\nAlways check the supplied answer for unsupported claims.";
+
+    // The temporary vault exercises the same vault-local discovery path the UI
+    // uses, without relying on a developer's real ~/.claude skill collection.
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(skillPath, instructions, "utf8");
+    const resolved = await loadSelectedSkills(vaultDir, ["portable-review", "missing-skill", "portable-review"]);
+
+    expect(resolved.missing).toEqual(["missing-skill"]);
+    expect(resolved.unreadable).toEqual([]);
+    expect(resolved.skills).toHaveLength(1); // Duplicate UI selections cannot duplicate prompt instructions.
+    expect(resolved.skills[0]).toMatchObject({ name: "portable-review", instructions });
+
+    // Claude receives the bundle in its system-prompt append.
+    const claudeAppend = buildAppend({
+      persona: "TEST PERSONA",
+      mode: "ask",
+      skills: resolved.skills,
+      phase: "draft",
+    });
+    expect(claudeAppend).toContain(instructions);
+
+    // Every CLI command uses the same stdin prompt, so every external agent gets
+    // the complete skill text without needing a native Skill tool installation.
+    const cliPrompt = injectSkillsIntoPrompt("Return a review.", resolved.skills);
+    expect(buildSkillsNote(resolved.skills)).toContain("BEGIN USER-SELECTED SKILL: portable-review");
+    expect(cliPrompt).toContain(instructions);
+    for (const engine of ["gemini", "opencode", "cursor", "copilot", "codex"] as const) {
+      const built = buildCliCommand(engine, { prompt: "Return a review.", skills: resolved.skills });
+      expect(built.writeToStdin).toBe(true);
+      expect(built.prompt).toContain(instructions);
+    }
+
+    await rm(vaultDir, { recursive: true, force: true });
   });
 
   test("prompt builders construct correct prompt structures", () => {
@@ -125,6 +170,37 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
     expect(settings.engineReasoning.claude).toBe("high");
     expect(effectiveEngineModel(settings, "codex")).toBe("gpt-5.2-codex");
     expect(effectiveEngineReasoning(settings, "codex")).toBe("max");
+    // Old browser settings used "basic" before the local resolver existed.
+    // Normalization upgrades them to the safe Readability-first auto mode.
+    expect(normalizeServerSettings({ urlFetchMethod: "basic" as any }).urlFetchMethod).toBe("auto");
+  });
+
+  test("uses a portable, bounded web research protocol for every agent", async () => {
+    const settings = defaultSettings();
+
+    // Research remains disabled until the owner explicitly opts into their local
+    // SearXNG instance; no hosted search provider is silently contacted.
+    expect(webResearchEnabled(settings)).toBe(false);
+    settings.webResearchEnabled = true;
+    settings.searxngUrl = "http://127.0.0.1:8080";
+    expect(webResearchEnabled(settings)).toBe(true);
+
+    const skill = buildWebResearchSkill();
+    expect(skill).toContain("<vault-web-tool>");
+    expect(skill).toContain('"web_search"');
+    expect(skill).toContain('"web_read"');
+
+    // Only a standalone, schema-valid request can trigger a network operation.
+    expect(parseWebToolRequest('<vault-web-tool>{"tool":"web_search","query":"SearXNG JSON API"}</vault-web-tool>')).toEqual({
+      tool: "web_search",
+      query: "SearXNG JSON API",
+    });
+    expect(parseWebToolRequest('Here is a request: <vault-web-tool>{"tool":"web_search","query":"x"}</vault-web-tool>')).toBeUndefined();
+    expect(parseWebToolRequest('<vault-web-tool>{"tool":"shell","command":"curl example.com"}</vault-web-tool>')).toBeUndefined();
+
+    // The resolver rejects loopback before making a request, guarding the server
+    // from an agent or URL-import workflow being used as an SSRF proxy.
+    await expect(resolveWebPage("http://127.0.0.1/private", "readability")).rejects.toThrow("Private, local, or reserved");
   });
 
   test("server and client settings share engine defaults", () => {

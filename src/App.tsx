@@ -37,7 +37,6 @@ import { TabBar } from "./components/TabBar";
 import { TabView } from "./components/TabView";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { QuickNotes } from "./components/QuickNotes";
-import { LogsModal } from "./components/LogsModal";
 import { FunBackground } from "./components/FunBackground";
 import { createConversationActions } from "./lib/conversation-actions";
 
@@ -73,7 +72,6 @@ export function App() {
   const [availableSkills, setAvailableSkills] = useState<SkillInfo[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
-  const [logsOpen, setLogsOpen] = useState(false);
   const [toolbarDropOpen, setToolbarDropOpen] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>(() => loadLogs());
   const [theme, setTheme] = useState<"dark" | "light">(
@@ -304,7 +302,11 @@ export function App() {
     controllers.current.get(tab.id)?.abort();
     const controller = new AbortController();
     controllers.current.set(tab.id, controller);
-    updateTab(tab.id, initial);
+    // Clear any prior tool activity so the log reflects only this run.
+    updateTab(tab.id, (current) => ({
+      activity: [],
+      ...(typeof initial === "function" ? initial(current) : initial),
+    }));
 
     streamPost(
       `/api/tabs/${tab.id}/${endpoint}`,
@@ -312,6 +314,7 @@ export function App() {
       {
         phase: (data) => updateTab(tab.id, { phase: data.phase }),
         error: (data) => updateTab(tab.id, { phase: "error", error: data.message }),
+        activity: (data) => updateTab(tab.id, (current) => ({ activity: [...current.activity, data] })),
         ...handlers,
       },
       controller.signal
@@ -331,8 +334,8 @@ export function App() {
     const controller = new AbortController();
     controllers.current.set(tab.id, controller);
     
-    updateTab(tab.id, { phase: "draft", error: undefined, writePreview: "", writeConfirmed: false });
-    
+    updateTab(tab.id, { phase: "draft", error: undefined, writePreview: "", writeConfirmed: false, activity: [] });
+
     const input = tab.writeInput.trim();
     const isUrl = /^https?:\/\//i.test(input);
     let finalInput = input;
@@ -358,6 +361,7 @@ export function App() {
       {
         phase: (d) => updateTab(tab.id, { phase: d.phase }),
         text: (d) => updateTab(tab.id, (t) => ({ writePreview: (t.writePreview || "") + d.delta })),
+        activity: (d) => updateTab(tab.id, (t) => ({ activity: [...t.activity, d] })),
         done: (d) => updateTab(tab.id, { phase: "done", writePreview: d.text }),
         error: (d) => updateTab(tab.id, { phase: "error", error: d.message }),
       },
@@ -607,21 +611,42 @@ export function App() {
                       className={`toolbar-dropdown-item ${split ? "active" : ""}`}
                       onClick={() => { toggleSplit(); setToolbarDropOpen(false); }}
                     >
-                      <span className="toolbar-dropdown-item-icon">◫</span>
+                      <span className="toolbar-dropdown-item-icon">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                          <rect x="3" y="4" width="18" height="16" rx="2" />
+                          <line x1="12" y1="4" x2="12" y2="20" />
+                        </svg>
+                      </span>
                       {split ? "Close split view" : "Split view"}
                     </button>
                     <button
                       className="toolbar-dropdown-item"
                       onClick={() => { setTheme((t) => (t === "dark" ? "light" : "dark")); setToolbarDropOpen(false); }}
                     >
-                      <span className="toolbar-dropdown-item-icon">{theme === "dark" ? "☾" : "☀"}</span>
+                      <span className="toolbar-dropdown-item-icon">
+                        {theme === "dark" ? (
+                          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                          </svg>
+                        ) : (
+                          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                            <circle cx="12" cy="12" r="4" />
+                            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+                          </svg>
+                        )}
+                      </span>
                       {theme === "dark" ? "Light theme" : "Dark theme"}
                     </button>
                     <button
                       className="toolbar-dropdown-item"
                       onClick={() => { setDensity((d) => (d === "compact" ? "comfortable" : "compact")); setToolbarDropOpen(false); }}
                     >
-                      <span className="toolbar-dropdown-item-icon">{density === "compact" ? "▣" : "▢"}</span>
+                      <span className="toolbar-dropdown-item-icon">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                          <rect x="3" y="4" width="18" height="6" rx="1.5" />
+                          <rect x="3" y="14" width="18" height="6" rx="1.5" />
+                        </svg>
+                      </span>
                       {density === "compact" ? "Comfortable density" : "Compact density"}
                     </button>
                     <div className="toolbar-dropdown-divider" />
@@ -639,21 +664,14 @@ export function App() {
                     </button>
                     <button
                       className="toolbar-dropdown-item"
-                      onClick={() => { setLogsOpen(true); setToolbarDropOpen(false); }}
+                      onClick={() => { setSettingsOpen(true); setToolbarDropOpen(false); }}
                     >
                       <span className="toolbar-dropdown-item-icon">
                         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                          <path d="M3 3v18h18" />
-                          <path d="M7 14l3-4 3 3 4-6" />
+                          <circle cx="12" cy="12" r="3" />
+                          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
                         </svg>
                       </span>
-                      Logs
-                    </button>
-                    <button
-                      className="toolbar-dropdown-item"
-                      onClick={() => { setSettingsOpen(true); setToolbarDropOpen(false); }}
-                    >
-                      <span className="toolbar-dropdown-item-icon">⚙</span>
                       Settings
                     </button>
                   </div>
@@ -683,23 +701,20 @@ export function App() {
                 </svg>
               </button>
               <button
-                className={`icon-btn ${logsOpen ? "active" : ""}`}
-                title="Logs — recent activity & stats"
-                onClick={() => setLogsOpen(true)}
-              >
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                  <polyline points="14 2 14 8 20 8" />
-                  <line x1="16" y1="13" x2="8" y2="13" />
-                  <line x1="16" y1="17" x2="8" y2="17" />
-                </svg>
-              </button>
-              <button
-                className="icon-btn icon-btn-emoji"
+                className="icon-btn"
                 title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
                 onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
               >
-                {theme === "dark" ? "🌙" : "☀️"}
+                {theme === "dark" ? (
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <circle cx="12" cy="12" r="4" />
+                    <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+                  </svg>
+                )}
               </button>
               <button className="icon-btn" title="Settings" onClick={() => setSettingsOpen(true)}>
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -757,6 +772,7 @@ export function App() {
           engines={engines}
           skills={skills}
           availableSkills={availableSkills}
+          logs={logs}
           defaultMode={defaultMode}
           design={design}
           theme={theme}
@@ -768,23 +784,16 @@ export function App() {
           onDesignChange={changeDesign}
           onCreateSkill={createSkill}
           onRefreshSkills={refreshSkills}
+          onClearLogs={() => {
+            clearLogs();
+            api.clearLogs().catch(() => {});
+            setLogs([]);
+          }}
           onClose={() => setSettingsOpen(false)}
         />
       )}
 
       {quickOpen && <QuickNotes onClose={() => setQuickOpen(false)} />}
-
-      {logsOpen && (
-        <LogsModal
-          logs={logs}
-          onClear={() => {
-            clearLogs();
-            api.clearLogs().catch(() => {});
-            setLogs([]);
-          }}
-          onClose={() => setLogsOpen(false)}
-        />
-      )}
     </div>
   );
 }

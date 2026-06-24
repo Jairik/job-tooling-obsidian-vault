@@ -7,6 +7,7 @@
 import { type Tab, type Settings, type SkillInfo } from "../lib/store";
 import { VaultPathPicker } from "./VaultPathPicker";
 import { SkillPicker } from "./SkillPicker";
+import { ActivityLog } from "./ActivityLog";
 
 interface Props {
   tab: Tab;
@@ -221,7 +222,14 @@ export function VaultWriter({
               <div className="card-h">
                 <span className="vw-fillin-question">{q.question}</span>
                 <span className={`vw-fillin-status ${q.written ? 'ok' : ''}`}>
-                  {q.written ? '✓ Written' : 'Pending'}
+                  {q.written ? (
+                    <>
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                      Written
+                    </>
+                  ) : 'Pending'}
                 </span>
               </div>
               {!q.written && (
@@ -331,6 +339,10 @@ export function VaultWriter({
           {tab.writeMode === "fillin" && renderFillin()}
         </div>
       </div>
+
+      {/* The agent's thought process / tool loop for the current write action,
+          mirroring the activity view shown in Ask and Job modes. */}
+      <ActivityLog activity={tab.activity} />
     </div>
   );
 }

@@ -116,7 +116,7 @@ export function SkillPicker({ availableSkills, selected, onChange, title }: Prop
                   ))
                 )}
               </div>
-              <div className="skills-dd-footer">Skills run after the main draft.</div>
+              <div className="skills-dd-footer">Selected skills are embedded for every agent.</div>
             </div>
           </>,
           document.body

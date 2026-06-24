@@ -2,16 +2,17 @@
 // global Settings (engine/model/effort, vault dirs, persona, RAG, etc.), the
 // theme/density prefs, and the local DesignSettings (Appearance). Changes are
 // lifted to App, which persists them; this component holds no source of truth.
-import { useEffect, useState, type ReactNode } from "react";
-import type { Settings, TabMode, DesignSettings, SkillInfo } from "../lib/store";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { Settings, TabMode, DesignSettings, SkillInfo, LogEntry } from "../lib/store";
 import { effectiveEngineModel, effectiveEngineReasoning } from "../../shared/settings";
 import { api, type ModelOption } from "../lib/api";
 import { loadFont } from "../lib/fonts";
 import { UsagePanel } from "./UsagePanel";
+import { LogsView } from "./LogsView";
 import { DesignSettingsSection } from "./DesignSettingsSection";
 
 type CreateSkillResult = { ok: boolean; error?: string };
-type PageId = "general" | "vault" | "persona" | "engine" | "rag" | "skills" | "appearance" | "usage";
+type PageId = "general" | "vault" | "persona" | "engine" | "rag" | "skills" | "appearance" | "usage" | "logs";
 
 interface Props {
   settings: Settings;
@@ -19,6 +20,7 @@ interface Props {
   engines: ModelOption[];
   skills: { humanizer: boolean; gemini: boolean; opencode: boolean; cursor: boolean; copilot: boolean; codex: boolean };
   availableSkills: SkillInfo[];
+  logs: LogEntry[];
   defaultMode: TabMode;
   design: DesignSettings;
   theme: "dark" | "light";
@@ -30,6 +32,7 @@ interface Props {
   onDesignChange: (patch: Partial<DesignSettings>) => void;
   onCreateSkill: (payload: { name: string; description: string; body: string; scope: "user" | "vault" }) => Promise<CreateSkillResult>;
   onRefreshSkills: () => void;
+  onClearLogs: () => void;
   onClose: () => void;
 }
 
@@ -85,6 +88,7 @@ const NAV: { group: string; items: { id: PageId; label: string; icon: ReactNode 
     group: "Interface",
     items: [
       { id: "appearance", label: "Appearance", icon: (<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></svg>) },
+      { id: "logs", label: "Logs", icon: (<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></svg>) },
       { id: "usage", label: "Usage", icon: (<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /></svg>) },
     ],
   },
@@ -92,7 +96,7 @@ const NAV: { group: string; items: { id: PageId; label: string; icon: ReactNode 
 
 const PAGE_TITLE: Record<PageId, string> = {
   general: "General", vault: "Vault", persona: "Persona", engine: "AI Engine",
-  rag: "RAG / Retrieval", skills: "Skills", appearance: "Appearance", usage: "Usage",
+  rag: "RAG / Retrieval", skills: "Skills", appearance: "Appearance", logs: "Logs", usage: "Usage",
 };
 
 /* Maps an internal engine identifier to the executable users need to install. */
@@ -108,6 +112,7 @@ export function SettingsPanel({
   engines,
   skills,
   availableSkills,
+  logs,
   defaultMode,
   design,
   theme,
@@ -119,6 +124,7 @@ export function SettingsPanel({
   onDesignChange,
   onCreateSkill,
   onRefreshSkills,
+  onClearLogs,
   onClose,
 }: Props) {
   const [page, setPage] = useState<PageId>("general");
@@ -126,15 +132,21 @@ export function SettingsPanel({
   const [vault, setVault] = useState<VaultState | null>(null);
   const [skillFilter, setSkillFilter] = useState("");
 
-  // "Add skill" form state.
+  // "Create skill" flow: describe → agent writes → edit or agent-rewrite → save.
   const [skillFormOpen, setSkillFormOpen] = useState(false);
+  const [skillDescribe, setSkillDescribe] = useState(""); // plain-language request
+  const [skillFeedback, setSkillFeedback] = useState(""); // agent-rewrite instructions
   const [skillName, setSkillName] = useState("");
   const [skillDesc, setSkillDesc] = useState("");
   const [skillBody, setSkillBody] = useState("");
   const [skillScope, setSkillScope] = useState<"user" | "vault">("user");
-  const [skillBusy, setSkillBusy] = useState(false);
+  const [skillDraftReady, setSkillDraftReady] = useState(false); // a draft exists to edit/save
+  const [skillGenBusy, setSkillGenBusy] = useState(false); // a generate/rewrite stream is live
+  const [skillPreview, setSkillPreview] = useState(""); // live document while it streams
+  const [skillBusy, setSkillBusy] = useState(false); // save in progress
   const [skillError, setSkillError] = useState("");
   const [skillOk, setSkillOk] = useState("");
+  const skillAbort = useRef<AbortController | null>(null);
   const currentModel = effectiveEngineModel(settings);
   const currentReasoning = effectiveEngineReasoning(settings);
   const selectedEngineAvailable =
@@ -160,7 +172,80 @@ export function SettingsPanel({
     });
   };
 
-  /* Validates and submits the small in-panel form used to create a skill. */
+  /* Stops an in-flight generation both locally and on the server. */
+  const stopSkillGeneration = () => {
+    skillAbort.current?.abort();
+    api.cancel("__skill_creator__").catch(() => {});
+    setSkillGenBusy(false);
+  };
+
+  // Stream a generated or rewritten SKILL.md into the editable draft fields. The
+  // document is shown live as it streams; the parsed name/description/body land in
+  // the editable fields when the run finishes.
+  /* Runs the skill-creator over the description (generate) or current draft (rewrite). */
+  const runSkillGeneration = (mode: "generate" | "rewrite") => {
+    if (skillGenBusy) return;
+    setSkillError("");
+    setSkillOk("");
+    setSkillPreview("");
+    setSkillGenBusy(true);
+    const controller = new AbortController();
+    skillAbort.current = controller;
+
+    const payload =
+      mode === "rewrite"
+        ? {
+            description: skillDescribe,
+            current: { name: skillName, description: skillDesc, body: skillBody },
+            feedback: skillFeedback,
+          }
+        : { description: skillDescribe };
+
+    api
+      .generateSkill(
+        payload,
+        {
+          text: (d) => setSkillPreview((p) => p + (d.delta ?? "")),
+          done: (d) => {
+            setSkillName(d.name ?? "");
+            setSkillDesc(d.description ?? "");
+            setSkillBody(d.body ?? "");
+            setSkillDraftReady(true);
+            setSkillGenBusy(false);
+            if (mode === "rewrite") setSkillFeedback("");
+            if (!d.name) setSkillError("Generated a skill but couldn't read a name — set one before saving.");
+          },
+          error: (d) => {
+            setSkillError(d.message || "Skill generation failed.");
+            setSkillGenBusy(false);
+          },
+        },
+        controller.signal
+      )
+      .catch((e) => {
+        if (!controller.signal.aborted) setSkillError(String(e));
+        setSkillGenBusy(false);
+      })
+      .finally(() => {
+        skillAbort.current = null;
+      });
+  };
+
+  /* Clears the entire create-skill flow back to its initial state. */
+  const resetSkillForm = () => {
+    stopSkillGeneration();
+    setSkillFormOpen(false);
+    setSkillDescribe("");
+    setSkillFeedback("");
+    setSkillName("");
+    setSkillDesc("");
+    setSkillBody("");
+    setSkillPreview("");
+    setSkillDraftReady(false);
+    setSkillError("");
+  };
+
+  /* Persists the current (possibly hand-edited) draft via the create endpoint. */
   const submitSkill = async () => {
     setSkillBusy(true);
     setSkillError("");
@@ -169,10 +254,7 @@ export function SettingsPanel({
     setSkillBusy(false);
     if (res.ok) {
       setSkillOk(`Created "${skillName.trim().toLowerCase()}".`);
-      setSkillName("");
-      setSkillDesc("");
-      setSkillBody("");
-      setSkillFormOpen(false);
+      resetSkillForm();
     } else {
       setSkillError(res.error || "Failed to create skill.");
     }
@@ -205,6 +287,9 @@ export function SettingsPanel({
       loadFont(design.fontFamily);
     }
   }, [design.fontFamily]);
+
+  // Abort any in-flight skill generation if the panel unmounts mid-stream.
+  useEffect(() => () => skillAbort.current?.abort(), []);
 
   const fq = skillFilter.trim().toLowerCase();
   const shownSkills = fq
@@ -396,7 +481,9 @@ export function SettingsPanel({
                         aria-label="Selected default agent"
                         onClick={() => onChange({ engine: settings.engine })}
                       >
-                        ✓
+                        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
                       </button>
                     </div>
                   </div>
@@ -487,15 +574,36 @@ export function SettingsPanel({
                   </div>
                   <div className="s-field">
                     <div className="s-field-label">URL fetch method</div>
-                    <div className="s-field-desc">How text is extracted from URLs when summarizing in the Vault Writer.</div>
+                    <div className="s-field-desc">How the local resolver extracts URLs in the Vault Writer and agent research.</div>
                     <select
                       className="s-select"
                       style={{ width: "100%" }}
-                      value={settings.urlFetchMethod || "basic"}
+                      value={settings.urlFetchMethod}
                       onChange={(e) => onChange({ urlFetchMethod: e.target.value as Settings["urlFetchMethod"] })}
                     >
-                      <option value="basic">Basic (lightweight fetch)</option>
+                      <option value="readability">Readability (fast, static pages)</option>
+                      <option value="auto">Auto (Readability, then local Chromium)</option>
+                      <option value="playwright">Chromium (JavaScript-heavy pages)</option>
                     </select>
+                  </div>
+                  <div className="s-row">
+                    <div>
+                      <div className="s-row-label">Enable local web research</div>
+                      <div className="s-row-desc">Lets every agent request bounded searches and page reads through your SearXNG instance.</div>
+                    </div>
+                    <Toggle checked={settings.webResearchEnabled} onChange={(v) => onChange({ webResearchEnabled: v })} />
+                  </div>
+                  <div className="s-field">
+                    <div className="s-field-label">Local SearXNG URL</div>
+                    <div className="s-field-desc">Must point to a loopback SearXNG server with JSON output enabled. No paid search API is used.</div>
+                    <input
+                      className="s-input"
+                      type="url"
+                      placeholder="http://127.0.0.1:8080"
+                      value={settings.searxngUrl}
+                      onChange={(e) => onChange({ searxngUrl: e.target.value })}
+                      spellCheck={false}
+                    />
                   </div>
                 </div>
               </div>
@@ -539,8 +647,9 @@ export function SettingsPanel({
                 <div className="s-section">
                   <span className="s-section-lbl">Create skill</span>
                   <p className="notice small">
-                    Skills are <code>SKILL.md</code> folders in <code>~/.claude/skills</code> (user) or the vault's
-                    <code> .claude/skills</code> (vault).
+                    Describe what you want and the agent writes the <code>SKILL.md</code> for you using the
+                    skill-creator skill. Then edit it yourself or ask the agent to revise it before saving to
+                    <code> ~/.claude/skills</code> (user) or the vault's <code>.claude/skills</code> (vault).
                   </p>
                   {skillOk && <div className="vault-status ok">{skillOk}</div>}
                   {!skillFormOpen ? (
@@ -549,38 +658,90 @@ export function SettingsPanel({
                       style={{ width: "fit-content" }}
                       onClick={() => { setSkillFormOpen(true); setSkillError(""); setSkillOk(""); }}
                     >
-                      Add skill
+                      Create skill
                     </button>
                   ) : (
                     <div className="skill-form">
                       <div className="s-field">
-                        <div className="s-field-label">Name (kebab-case)</div>
-                        <input className="s-input" type="text" value={skillName} spellCheck={false} placeholder="e.g. tone-check" onChange={(e) => setSkillName(e.target.value)} />
+                        <div className="s-field-label">Describe the skill</div>
+                        <textarea
+                          className="s-textarea"
+                          rows={3}
+                          value={skillDescribe}
+                          placeholder="e.g. A skill that turns my rough meeting notes into a clean summary with decisions and action items."
+                          onChange={(e) => setSkillDescribe(e.target.value)}
+                        />
+                        <div className="skills-actions">
+                          {skillGenBusy ? (
+                            <button className="btn-cancel" onClick={stopSkillGeneration}>Stop</button>
+                          ) : (
+                            <button
+                              className="btn-primary"
+                              disabled={!skillDescribe.trim()}
+                              onClick={() => runSkillGeneration("generate")}
+                            >
+                              {skillDraftReady ? "Regenerate" : "Generate skill"}
+                            </button>
+                          )}
+                        </div>
                       </div>
-                      <div className="s-field">
-                        <div className="s-field-label">Description</div>
-                        <input className="s-input" type="text" value={skillDesc} placeholder="When should the agent use this skill?" onChange={(e) => setSkillDesc(e.target.value)} />
-                      </div>
-                      <div className="s-field">
-                        <div className="s-field-label">Instructions</div>
-                        <textarea className="s-textarea" rows={5} spellCheck={false} value={skillBody} placeholder="Markdown instructions for the skill…" onChange={(e) => setSkillBody(e.target.value)} />
-                      </div>
-                      <div className="s-field">
-                        <div className="s-field-label">Scope</div>
-                        <select className="s-select" style={{ width: "100%" }} value={skillScope} onChange={(e) => setSkillScope(e.target.value as "user" | "vault")}>
-                          <option value="user">User (~/.claude/skills)</option>
-                          <option value="vault">Vault (.claude/skills)</option>
-                        </select>
-                      </div>
+
+                      {skillGenBusy && (
+                        <div className="s-field">
+                          <div className="s-field-label">Writing skill…</div>
+                          <pre className="skill-preview">{skillPreview || "…"}</pre>
+                        </div>
+                      )}
+
+                      {skillDraftReady && !skillGenBusy && (
+                        <>
+                          <div className="s-field">
+                            <div className="s-field-label">Name (kebab-case)</div>
+                            <input className="s-input" type="text" value={skillName} spellCheck={false} placeholder="e.g. meeting-notes" onChange={(e) => setSkillName(e.target.value)} />
+                          </div>
+                          <div className="s-field">
+                            <div className="s-field-label">Description</div>
+                            <textarea className="s-textarea" rows={2} value={skillDesc} placeholder="When should the agent use this skill?" onChange={(e) => setSkillDesc(e.target.value)} />
+                          </div>
+                          <div className="s-field">
+                            <div className="s-field-label">Instructions</div>
+                            <textarea className="s-textarea" rows={8} spellCheck={false} value={skillBody} placeholder="Markdown instructions for the skill…" onChange={(e) => setSkillBody(e.target.value)} />
+                          </div>
+                          <div className="s-field">
+                            <div className="s-field-label">Ask the agent to revise</div>
+                            <div className="skill-rewrite-row">
+                              <input
+                                className="s-input"
+                                type="text"
+                                value={skillFeedback}
+                                placeholder="e.g. make it stricter about always listing action items"
+                                onChange={(e) => setSkillFeedback(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === "Enter" && skillFeedback.trim()) runSkillGeneration("rewrite"); }}
+                              />
+                              <button className="btn" disabled={!skillFeedback.trim()} onClick={() => runSkillGeneration("rewrite")}>
+                                Rewrite
+                              </button>
+                            </div>
+                          </div>
+                          <div className="s-field">
+                            <div className="s-field-label">Scope</div>
+                            <select className="s-select" style={{ width: "100%" }} value={skillScope} onChange={(e) => setSkillScope(e.target.value as "user" | "vault")}>
+                              <option value="user">User (~/.claude/skills)</option>
+                              <option value="vault">Vault (.claude/skills)</option>
+                            </select>
+                          </div>
+                        </>
+                      )}
+
                       {skillError && <div className="vault-status bad">{skillError}</div>}
                       <div className="skills-actions">
-                        <button className="btn-ghost" onClick={() => setSkillFormOpen(false)}>Cancel</button>
+                        <button className="btn-ghost" onClick={resetSkillForm}>Cancel</button>
                         <button
                           className="btn-primary"
-                          disabled={skillBusy || !skillName.trim() || !skillDesc.trim()}
+                          disabled={skillBusy || skillGenBusy || !skillDraftReady || !skillName.trim() || !skillDesc.trim()}
                           onClick={submitSkill}
                         >
-                          {skillBusy ? "Creating…" : "Create skill"}
+                          {skillBusy ? "Saving…" : "Save skill"}
                         </button>
                       </div>
                     </div>
@@ -618,6 +779,16 @@ export function SettingsPanel({
                   </div>
                 </div>
                 <DesignSettingsSection design={design} onChange={onDesignChange} />
+              </div>
+            )}
+
+            {/* ── LOGS ── */}
+            {page === "logs" && (
+              <div className="s-page">
+                <div className="s-section">
+                  <span className="s-section-lbl">Activity</span>
+                  <LogsView logs={logs} onClear={onClearLogs} />
+                </div>
               </div>
             )}
 

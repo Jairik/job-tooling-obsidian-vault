@@ -27,6 +27,10 @@ is appended to `logs/activity.jsonl` (all gitignored).
    - **Draft turn** — writes a grounded first-person answer.
    - **Humanize turn** — runs the `humanizer` skill on the draft (if enabled).
    - Follow-ups resume the same session so context is preserved.
+   - When local web research is enabled, an engine can request up to four
+     mediated SearXNG searches or public page reads through a portable text
+     protocol. The resulting evidence is marked untrusted before it returns to
+     the model.
 4. **Streaming back** — the runner `emit`s events the UI consumes:
    `phase`, `text` (token deltas), `activity` (tool/RAG use), `draft`, `notice`,
    `done`, `error`.
@@ -37,8 +41,8 @@ The engine is chosen globally or per tab.
 
 - **Claude Code** (`@anthropic-ai/claude-agent-sdk`) — the default. Reuses your
   existing Claude Code auth. By default the agent reads the vault itself with
-  `Read`/`Grep`/`Glob`, and the `Skill` tool runs any skills selected for the
-  tab. (Skills are unavailable on the CLI engines below, which run sandboxed.)
+  `Read`/`Grep`/`Glob`. User-selected `SKILL.md` files are embedded in the
+  request for this engine and for every CLI engine.
 - **Gemini Antigravity** (`agent/gemini.ts`) — shells out to the `agy` CLI in a
   sandboxed temp dir. It gets no filesystem access; the app gathers vault context
   and injects it into the prompt. Humanization uses inline rules, and follow-ups
@@ -64,3 +68,5 @@ RAG mode is the token-efficient path. See [rag.md](rag.md) for details.
 - Claude Code usage (`/usage` data) — `agent/usage.ts`
 - Client state and localStorage — `src/lib/store.ts`
 - API client (SSE parsing) — `src/lib/api.ts`
+- Local web search and content resolution — `agent/web.ts`; see
+  [web-research.md](web-research.md)

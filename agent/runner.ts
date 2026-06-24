@@ -26,14 +26,23 @@ import {
   buildFillinScanPrompt,
   buildFillinAnswerPrompt,
   buildWriteCleanupPrompt,
+  buildGenerateSkillPrompt,
+  buildRewriteSkillPrompt,
   buildSkillsNote,
   type SkillNote,
 } from "./config";
 import { DEFAULT_CLAUDE_MODEL, DEFAULT_CLEANUP_MODEL, effectiveEngineModel, type TabMode } from "../shared/settings";
 import type { ServerSettings } from "./config";
-import { detectSkills, listSkills } from "./skills";
+import { detectSkills, loadSelectedSkills, loadSkillCreatorGuide, parseGeneratedSkill } from "./skills";
 import { cliAvailable, runCliTurn, gatherVaultContext } from "./gemini";
 import { retrieveContext } from "./rag";
+import {
+  buildWebResearchSkill,
+  formatWebToolResult,
+  parseWebToolRequest,
+  runWebTool,
+  webResearchEnabled,
+} from "./web";
 
 const DEFAULT_TOOLS = ["Skill", "Read", "Grep", "Glob"];
 // In RAG mode the excerpts are injected into the prompt, so file-browsing tools
@@ -98,6 +107,9 @@ interface TurnArgs {
   allowedTools?: string[];
   emit: Emit;
   abort: AbortController;
+  // Agentic web-research requests are protocol messages, not user-visible text.
+  // The mediator emits only the final answer after fulfilling any requested reads.
+  suppressText?: boolean;
 }
 
 // Run one query() turn. Streams text deltas + tool activity; returns the final
@@ -131,7 +143,7 @@ async function runTurn(args: TurnArgs): Promise<{ text: string; sessionId?: stri
       const ev = msg.event;
       if (ev?.type === "content_block_delta" && ev.delta?.type === "text_delta") {
         streamed += ev.delta.text;
-        args.emit("text", { phase: args.phase, delta: ev.delta.text });
+        if (!args.suppressText) args.emit("text", { phase: args.phase, delta: ev.delta.text });
       }
     } else if (msg.type === "assistant") {
       for (const block of msg.message?.content ?? []) {
@@ -170,41 +182,138 @@ async function retrieveForQuery(settings: ServerSettings, query: string, emit: E
   return r.context;
 }
 
-// Resolve the user's selected skill names into prompt notes (name + description).
-// On CLI engines the Skill tool is unavailable, so any selection is skipped with
-// a notice; names that don't match an installed skill are reported and dropped.
-/* Resolves user-selected skill names into the descriptions required by prompt builders. */
+// Resolve selected names into complete SKILL.md instruction bundles. The bundles
+// are prompt-injected for CLI engines and included in Claude's system prompt, so
+// skill selection behaves identically regardless of the active agent.
+/* Resolves user-selected skills into portable prompt instructions. */
 async function resolveSkillNotes(
   settings: ServerSettings,
   names: string[] | undefined,
-  isCliEngine: boolean,
   emit: Emit
 ): Promise<SkillNote[]> {
-  const selected = names ?? [];
-  if (!selected.length) return [];
-  if (isCliEngine) {
-    emit("notice", {
-      message: `Skills use the Claude-only Skill tool and are skipped on the \`${settings.engine}\` CLI engine.`,
-    });
-    return [];
-  }
-  const byName = new Map((await listSkills(settings.vaultDir)).map((s) => [s.name, s]));
-  const notes: SkillNote[] = [];
-  const missing: string[] = [];
-  for (const n of selected) {
-    const info = byName.get(n);
-    if (info) notes.push({ name: info.name, description: info.description });
-    else missing.push(n);
-  }
+  const { skills, missing, unreadable } = await loadSelectedSkills(settings.vaultDir, names);
   if (missing.length) {
     emit("notice", { message: `Skill${missing.length === 1 ? "" : "s"} not found and skipped: ${missing.join(", ")}.` });
   }
-  return notes;
+  if (unreadable.length) {
+    emit("notice", { message: `Skill${unreadable.length === 1 ? "" : "s"} could not be read and skipped: ${unreadable.join(", ")}.` });
+  }
+  return skills;
 }
 
-// Ensure the Skill tool is allowed when skills are selected so the agent can
-// invoke them. `undefined` keeps the default tool set (which already has Skill).
-/* Adds the Skill tool only for turns that actually selected one or more skills. */
+const MAX_WEB_TOOL_CALLS = 4;
+
+interface WebTurnResult {
+  text: string;
+  sessionId?: string;
+}
+
+interface WebResearchLoopArgs {
+  task: string;
+  settings: ServerSettings;
+  phase: string;
+  emit: Emit;
+  abort: AbortController;
+  // The boolean suppresses intermediate model text. It is required because a
+  // cross-engine text protocol has no native "tool call" event to hide for us.
+  execute: (prompt: string, suppressText: boolean) => Promise<WebTurnResult>;
+}
+
+/*
+ * Gives every engine the identical text-based web tool contract. Claude has
+ * native tools and each CLI has its own tool API, but those APIs are not portable;
+ * this bounded request/result loop is. It is deliberately server-mediated rather
+ * than letting a model run shell commands or reach arbitrary network targets.
+ */
+async function runWithWebResearch(args: WebResearchLoopArgs): Promise<WebTurnResult> {
+  if (!webResearchEnabled(args.settings)) return args.execute(args.task, false);
+
+  const skill = buildWebResearchSkill();
+  const evidence: string[] = [];
+  let prompt = `${skill}\n\nTASK\n${args.task}`;
+  let last: WebTurnResult = { text: "" };
+
+  for (let count = 0; count <= MAX_WEB_TOOL_CALLS; count++) {
+    if (args.abort.signal.aborted) throw new Error("Generation cancelled.");
+    last = await args.execute(prompt, true);
+    const request = parseWebToolRequest(last.text);
+    if (!request) {
+      // Do not reveal a protocol-shaped intermediate response. The entire final
+      // answer is emitted once, preserving clean output for every client engine.
+      if (last.text) args.emit("text", { phase: args.phase, delta: last.text });
+      return last;
+    }
+
+    if (count === MAX_WEB_TOOL_CALLS) {
+      prompt = `${skill}\n\nThe web research limit has been reached. Do not request another tool. Answer the original task using only the vault context and the web evidence below.\n\nORIGINAL TASK\n${args.task}\n\n${evidence.join("\n\n")}`;
+      last = await args.execute(prompt, true);
+      if (last.text) args.emit("text", { phase: args.phase, delta: last.text });
+      return last;
+    }
+
+    const input = request.tool === "web_search" ? request.query : request.url;
+    args.emit("activity", { tool: request.tool === "web_search" ? "Web search" : "Web read", input });
+    const result = await runWebTool(args.settings, request, args.abort.signal);
+    if (result.ok && result.tool === "web_search") {
+      args.emit("activity", { tool: "Web search", input: `${result.results.length} result${result.results.length === 1 ? "" : "s"}` });
+    } else if (result.ok && result.tool === "web_read") {
+      args.emit("activity", { tool: "Web read", input: result.page.sourceUrl });
+    } else if (!result.ok) {
+      args.emit("notice", { message: `Web research failed: ${result.error}` });
+    }
+    evidence.push(formatWebToolResult(result));
+    prompt = `${skill}\n\nORIGINAL TASK\n${args.task}\n\n${evidence.join("\n\n")}\n\nContinue the task. Request another tool only if needed; otherwise provide the final answer.`;
+  }
+
+  return last;
+}
+
+/* Runs one stateless external CLI turn with the portable web research protocol. */
+async function runCliAgentTurn(
+  engine: ServerSettings["engine"],
+  args: {
+    prompt: string;
+    skills?: SkillNote[];
+    phase: string;
+    emit: Emit;
+    abort: AbortController;
+    settings: ServerSettings;
+  }
+): Promise<string> {
+  const result = await runWithWebResearch({
+    task: args.prompt,
+    settings: args.settings,
+    phase: args.phase,
+    emit: args.emit,
+    abort: args.abort,
+    execute: async (prompt, suppressText) => ({
+      text: await runCliTurn(engine, { ...args, prompt, suppressText }),
+    }),
+  });
+  return result.text;
+}
+
+/* Runs a Claude SDK turn with the same protocol while preserving its session id. */
+async function runClaudeAgentTurn(args: TurnArgs): Promise<WebTurnResult> {
+  let resume = args.resume;
+  return runWithWebResearch({
+    task: args.prompt,
+    settings: args.settings,
+    phase: args.phase,
+    emit: args.emit,
+    abort: args.abort,
+    execute: async (prompt, suppressText) => {
+      const result = await runTurn({ ...args, prompt, resume, suppressText });
+      resume = result.sessionId ?? resume;
+      return result;
+    },
+  });
+}
+
+// Claude's native Skill tool stays available where its own built-in workflows
+// need it (notably the dedicated humanizer). Selected UI skills do not depend on
+// that tool because their full text is embedded in the prompt for every engine.
+/* Retains the native Skill tool in a restricted Claude tool list when needed. */
 function withSkillTool(tools: string[] | undefined, hasSkills: boolean): string[] | undefined {
   if (!hasSkills || tools === undefined) return tools;
   return tools.includes("Skill") ? tools : ["Skill", ...tools];
@@ -226,8 +335,9 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
 
   const isCliEngine = args.settings.engine !== "claude";
   const isAsk = args.mode === "ask";
-  // Selected skills apply to every mode (Claude engine only — CLI has no Skill tool).
-  const skillNotes = await resolveSkillNotes(args.settings, args.skills, isCliEngine, emit);
+  // Resolve once so both the draft and optional humanize phase receive the same
+  // selected skill instructions, independent of the chosen agent.
+  const skillNotes = await resolveSkillNotes(args.settings, args.skills, emit);
 
   let finalText = "";
   let finalSession: string | undefined;
@@ -258,15 +368,16 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
       }
       let context = ragContext;
       if (!context) context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
-      finalText = await runCliTurn(args.settings.engine, {
+      finalText = await runCliAgentTurn(args.settings.engine, {
         prompt: buildCliAskPrompt(ASK_PERSONA, context, args.question),
+        skills: skillNotes,
         phase: "draft",
         emit,
         abort,
         settings: args.settings,
       });
     } else {
-      const ans = await runTurn({
+      const ans = await runClaudeAgentTurn({
         prompt: useRag ? buildRagAskPrompt(ragContext, args.question) : buildAskPrompt(args.question),
         settings: args.settings,
         append: buildAppend({ persona: ASK_PERSONA, mode: "ask", skills: skillNotes, useRag, phase: "draft" }),
@@ -298,8 +409,9 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
     if (args.rag) context = await retrieveForQuery(args.settings, ragQuery, emit);
     if (!context) context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
     emit("phase", { phase: "draft" });
-    const draft = await runCliTurn(args.settings.engine, {
+    const draft = await runCliAgentTurn(args.settings.engine, {
       prompt: buildCliDraftPrompt(args.settings.persona, context, args.jobDescription, args.question),
+      skills: skillNotes,
       phase: "draft",
       emit,
       abort,
@@ -312,6 +424,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
       emit("phase", { phase: "humanize" });
       const hum = await runCliTurn(args.settings.engine, {
         prompt: buildCliHumanizePrompt(draft),
+        skills: skillNotes,
         phase: "humanize",
         emit,
         abort,
@@ -336,7 +449,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
     const tools = withSkillTool(useRag ? RAG_TOOLS : undefined, skillNotes.length > 0);
 
     emit("phase", { phase: "draft" });
-    const draft = await runTurn({
+    const draft = await runClaudeAgentTurn({
       prompt: useRag
         ? buildRagDraftPrompt(ragContext, args.jobDescription, args.question)
         : buildDraftPrompt(args.jobDescription, args.question),
@@ -394,7 +507,7 @@ export async function followUp(tabId: string, args: FollowUpArgs, emit: Emit): P
   // configurable job persona. The resumed session re-receives this each turn.
   const persona = args.mode === "ask" ? ASK_PERSONA : args.settings.persona;
   const isCliEngine = args.settings.engine !== "claude";
-  const skillNotes = await resolveSkillNotes(args.settings, args.skills, isCliEngine, emit);
+  const skillNotes = await resolveSkillNotes(args.settings, args.skills, emit);
 
   let finalText = "";
   let finalSession = prev?.sessionId;
@@ -407,8 +520,9 @@ export async function followUp(tabId: string, args: FollowUpArgs, emit: Emit): P
     let context = "";
     if (args.rag) context = await retrieveForQuery(args.settings, args.text, emit);
     if (!context) context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
-    finalText = await runCliTurn(args.settings.engine, {
+    finalText = await runCliAgentTurn(args.settings.engine, {
       prompt: buildCliFollowupPrompt(persona, context, prev?.lastAnswer ?? "", args.text),
+      skills: skillNotes,
       phase: "followup",
       emit,
       abort,
@@ -419,7 +533,7 @@ export async function followUp(tabId: string, args: FollowUpArgs, emit: Emit): P
     let ragContext = "";
     if (args.rag) ragContext = await retrieveForQuery(args.settings, args.text, emit);
     const useRag = Boolean(ragContext);
-    const r = await runTurn({
+    const r = await runClaudeAgentTurn({
       prompt: useRag ? buildRagFollowupPrompt(ragContext, args.text) : args.text,
       resume: prev?.sessionId,
       settings: args.settings,
@@ -465,7 +579,7 @@ export async function cleanup(tabId: string, args: CleanupArgs, emit: Emit): Pro
 
   const isCliEngine = args.settings.engine !== "claude";
   const skills = await detectSkills(args.settings.vaultDir);
-  const skillNotes = await resolveSkillNotes(args.settings, args.skills, isCliEngine, emit);
+  const skillNotes = await resolveSkillNotes(args.settings, args.skills, emit);
   let cleaned = text;
 
   if (isCliEngine) {
@@ -475,6 +589,7 @@ export async function cleanup(tabId: string, args: CleanupArgs, emit: Emit): Pro
     }
     const out = await runCliTurn(args.settings.engine, {
       prompt: buildCliCleanupPrompt(text),
+      skills: skillNotes,
       phase: "cleanup",
       emit,
       abort,
@@ -521,6 +636,9 @@ interface EngineTurnArgs {
   settings: ServerSettings;
   claudeSettings?: ServerSettings;
   prompt: string;
+  // Selected SKILL.md bundles forwarded to CLI prompts. Claude receives the same
+  // bundle through its append field, so both execution paths stay equivalent.
+  skills?: SkillNote[];
   append: string;
   allowedTools: string[];
   phase: string;
@@ -536,6 +654,7 @@ async function runWriterTurn({
   settings,
   claudeSettings = settings,
   prompt,
+  skills,
   append,
   allowedTools,
   phase,
@@ -547,7 +666,7 @@ async function runWriterTurn({
       emit("error", { message: `The \`${settings.engine}\` CLI was not found on PATH.` });
       return undefined;
     }
-    return runCliTurn(settings.engine, { prompt, phase, emit, abort, settings });
+    return runCliTurn(settings.engine, { prompt, skills, phase, emit, abort, settings });
   }
 
   const result = await runTurn({
@@ -573,8 +692,7 @@ export async function summarize(tabId: string, args: SummarizeArgs, emit: Emit):
   // If input is a URL, the server should have already fetched + extracted the text
   // and passed it as `input`. We just summarize whatever text we receive.
 
-  const isCliEngine = args.settings.engine !== "claude";
-  const skillNotes = await resolveSkillNotes(args.settings, args.skills, isCliEngine, emit);
+  const skillNotes = await resolveSkillNotes(args.settings, args.skills, emit);
   let context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
 
   const note = buildSkillsNote(skillNotes);
@@ -582,6 +700,7 @@ export async function summarize(tabId: string, args: SummarizeArgs, emit: Emit):
   const finalText = await runWriterTurn({
     settings: args.settings,
     prompt: buildSummarizePrompt(sourceText, context),
+    skills: skillNotes,
     append: note ? `${baseAppend}\n\n${note}` : baseAppend,
     allowedTools: ["Skill"],
     phase: "draft",
@@ -693,13 +812,13 @@ export async function fillinWrite(tabId: string, args: FillinWriteArgs, emit: Em
 
   const context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
 
-  const isCliEngine = args.settings.engine !== "claude";
-  const skillNotes = await resolveSkillNotes(args.settings, args.skills, isCliEngine, emit);
+  const skillNotes = await resolveSkillNotes(args.settings, args.skills, emit);
   const note = buildSkillsNote(skillNotes);
   const baseAppend = "Format the user's answer into clean vault markdown. Output ONLY the formatted content.";
   const finalText = await runWriterTurn({
     settings: args.settings,
     prompt: buildFillinAnswerPrompt(context, args.question, args.answer, args.targetPath),
+    skills: skillNotes,
     append: note ? `${baseAppend}\n\n${note}` : baseAppend,
     allowedTools: ["Skill"],
     phase: "draft",
@@ -725,8 +844,7 @@ export async function writeCleanup(tabId: string, args: WriteCleanupArgs, emit: 
 
   emit("phase", { phase: "cleanup" });
 
-  const isCliEngine = args.settings.engine !== "claude";
-  const skillNotes = await resolveSkillNotes(args.settings, args.skills, isCliEngine, emit);
+  const skillNotes = await resolveSkillNotes(args.settings, args.skills, emit);
   const note = buildSkillsNote(skillNotes);
   const baseAppend = "Clean up and format the text into well-structured vault markdown.";
   const output = await runWriterTurn({
@@ -739,6 +857,7 @@ export async function writeCleanup(tabId: string, args: WriteCleanupArgs, emit: 
       engineReasoning: { ...(args.settings.engineReasoning ?? {}), claude: "low" },
     },
     prompt: buildWriteCleanupPrompt(args.text),
+    skills: skillNotes,
     append: note ? `${baseAppend}\n\n${note}` : baseAppend,
     allowedTools: ["Skill"],
     phase: "cleanup",
@@ -750,4 +869,69 @@ export async function writeCleanup(tabId: string, args: WriteCleanupArgs, emit: 
 
   sessions.set(tabId, { ...sessions.get(tabId), abort: undefined });
   emit("done", { text: finalText });
+}
+
+// ── Skill authoring ──────────────────────────────────────────────────────────
+
+interface GenerateSkillArgs {
+  description: string;
+  // When revising an existing draft, the current parsed skill plus the requested
+  // change. Their presence switches the turn from authoring to rewriting.
+  current?: { name: string; description: string; body: string };
+  feedback?: string;
+  settings: ServerSettings;
+}
+
+// Author (or rewrite) one complete SKILL.md from a plain-language description, using
+// the bundled skill-creator guide. The document streams out as text deltas so the UI
+// can show it being written, and the parsed name/description/body are returned on
+// `done` so the Settings form can drop them into editable fields. Like `cleanup`,
+// this runs a throwaway turn and does not touch any tab's conversation session.
+/* Generates or rewrites a SKILL.md and emits its parsed fields when complete. */
+export async function generateSkill(genId: string, args: GenerateSkillArgs, emit: Emit): Promise<void> {
+  const abort = new AbortController();
+  sessions.set(genId, { ...sessions.get(genId), abort });
+
+  const isRewrite = Boolean(args.feedback && args.current);
+  if (!isRewrite && !args.description.trim()) {
+    sessions.delete(genId);
+    emit("error", { message: "Describe the skill you want before generating." });
+    return;
+  }
+
+  emit("phase", { phase: "draft" });
+
+  const guide = await loadSkillCreatorGuide();
+  const skillNotes: SkillNote[] = [guide];
+  const note = buildSkillsNote(skillNotes);
+  const baseAppend =
+    "You are an expert skill author. From the user's request you write a single, complete, portable SKILL.md document — frontmatter plus Markdown body — following the attached skill-creator guide. Return only the document.";
+
+  const prompt =
+    isRewrite && args.current
+      ? buildRewriteSkillPrompt(args.current, args.feedback ?? "")
+      : buildGenerateSkillPrompt(args.description);
+
+  const output = await runWriterTurn({
+    settings: args.settings,
+    prompt,
+    skills: skillNotes,
+    append: note ? `${baseAppend}\n\n${note}` : baseAppend,
+    allowedTools: ["Skill"],
+    phase: "draft",
+    emit,
+    abort,
+  });
+
+  sessions.delete(genId);
+  if (output === undefined) return; // error already emitted by runWriterTurn
+
+  const raw = (output || "").trim();
+  if (!raw) {
+    emit("error", { message: "The agent returned an empty skill. Try again or add more detail." });
+    return;
+  }
+
+  const parsed = parseGeneratedSkill(raw);
+  emit("done", { ...parsed, raw });
 }

@@ -1,6 +1,6 @@
 // Tiny API client. Streaming endpoints are POST + SSE, so we read the response
 // body manually (EventSource only supports GET).
-import type { SkillInfo, LogEntry } from "./store";
+import type { SkillInfo, LogEntry, UrlFetchMethod } from "./store";
 import type { UsageResult } from "../../shared/usage";
 
 export type SSEHandlers = Record<string, (data: any) => void>;
@@ -86,6 +86,20 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     }).then((r) => r.json()),
+  /*
+   * Streams a generated (or rewritten) SKILL.md. `text` events carry the document
+   * as it is written; the `done` event carries the parsed { name, description, body }.
+   * Pass `current` + `feedback` to revise an existing draft instead of starting fresh.
+   */
+  generateSkill: (
+    payload: {
+      description: string;
+      current?: { name: string; description: string; body: string };
+      feedback?: string;
+    },
+    handlers: SSEHandlers,
+    signal?: AbortSignal
+  ): Promise<void> => streamPost("/api/skills/generate", payload, handlers, signal),
   validateVault: (
     path: string
   ): Promise<{ valid: boolean; isDir: boolean; foundDirs: string[]; message?: string }> =>
@@ -114,7 +128,10 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path, content }),
     }).then((r) => r.json()),
-  fetchUrl: (url: string, method = "basic"): Promise<{ text: string; title: string; error?: string }> =>
+  fetchUrl: (
+    url: string,
+    method: UrlFetchMethod
+  ): Promise<{ text: string; title: string; sourceUrl?: string; method?: string; error?: string }> =>
     fetch("/api/fetch-url", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

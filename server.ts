@@ -1,10 +1,11 @@
 /* Bun server that serves the React app and its JSON/SSE API. */
 import index from "./src/index.html";
-import { generate, followUp, cleanup, cancel, loadSessions, summarize, autoPlace, fillinScan, fillinWrite, writeCleanup } from "./agent/runner";
+import { generate, followUp, cleanup, cancel, loadSessions, summarize, autoPlace, fillinScan, fillinWrite, writeCleanup, generateSkill } from "./agent/runner";
 import { detectSkills, listSkills, createSkill } from "./agent/skills";
 import { geminiAvailable, cliAvailable } from "./agent/gemini";
 import { readLogs, appendLog, clearLogs } from "./agent/logs";
 import { fetchClaudeUsage } from "./agent/usage";
+import { resolveWebPage } from "./agent/web";
 import { loadConfig, saveConfig, defaultSettings, mergeServerSettings, MODELS, ENGINES, DEFAULT_VAULT, type ServerSettings } from "./agent/config";
 import { stat } from "fs/promises";
 import { join } from "path";
@@ -120,6 +121,37 @@ const server = Bun.serve({
       const url = new URL(req.url);
       const vault = url.searchParams.get("vault") || (await loadConfig()).vaultDir;
       return Response.json(await listSkills(vault));
+    },
+
+    // Author (or rewrite) a SKILL.md from a plain-language description, using the
+    // bundled skill-creator guide. Streams the document as it is written; the final
+    // event carries the parsed name/description/body for the Settings form to edit.
+    // Cancellable via /api/tabs/__skill_creator__/cancel (the reserved id below).
+    "/api/skills/generate": {
+      POST: async (req) => {
+        const body = await req.json();
+        const settings = await resolveSettings(undefined);
+        const current =
+          body.current && typeof body.current === "object"
+            ? {
+                name: String(body.current.name ?? ""),
+                description: String(body.current.description ?? ""),
+                body: String(body.current.body ?? ""),
+              }
+            : undefined;
+        return sse((emit) =>
+          generateSkill(
+            "__skill_creator__",
+            {
+              description: typeof body.description === "string" ? body.description : "",
+              current,
+              feedback: typeof body.feedback === "string" ? body.feedback : undefined,
+              settings,
+            },
+            emit
+          )
+        );
+      },
     },
 
     // Scaffold a new skill (SKILL.md) from the Settings "Add skill" form.
@@ -290,36 +322,17 @@ const server = Bun.serve({
     "/api/fetch-url": {
       POST: async (req) => {
         const body = await req.json();
-        const { url } = body;
+        const { url, method } = body;
         if (!url || typeof url !== "string") {
           return Response.json({ text: "", title: "", error: "Missing URL" }, { status: 400 });
         }
         try {
-          const res = await fetch(url, {
-            headers: { "User-Agent": "Mozilla/5.0 (compatible; VaultAssistant/1.0)" },
-            redirect: "follow",
-          });
-          const html = await res.text();
-          // Basic HTML to text extraction.
-          const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
-          const title = titleMatch ? titleMatch[1].trim() : "";
-          // Strip tags, decode entities, collapse whitespace.
-          const text = html
-            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-            .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-            .replace(/<[^>]+>/g, " ")
-            .replace(/&nbsp;/g, " ")
-            .replace(/&amp;/g, "&")
-            .replace(/&lt;/g, "<")
-            .replace(/&gt;/g, ">")
-            .replace(/&quot;/g, '"')
-            .replace(/&#39;/g, "'")
-            .replace(/\s+/g, " ")
-            .trim()
-            .slice(0, 50000);
-          return Response.json({ text, title });
+          // Resolve on the server so both URL imports and agent reads share the
+          // same bounded extraction, redirect validation, and SSRF protections.
+          const page = await resolveWebPage(url, method);
+          return Response.json(page);
         } catch (e: any) {
-          return Response.json({ text: "", title: "", error: e.message }, { status: 500 });
+          return Response.json({ text: "", title: "", error: String(e?.message || e) }, { status: 400 });
         }
       },
     },

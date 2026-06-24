@@ -8,7 +8,18 @@ export type Engine = "claude" | "gemini" | "opencode" | "cursor" | "copilot" | "
 export type EngineModels = Partial<Record<Engine, string>>;
 export type EngineReasoning = Partial<Record<Engine, string>>;
 export type TabMode = "ask" | "job" | "write";
-export type UrlFetchMethod = "basic";
+// `readability` handles ordinary server-rendered pages. `auto` adds the local
+// Chromium fallback only when article extraction is too sparse, and `playwright`
+// always renders first for JavaScript-heavy pages.
+export type UrlFetchMethod = "readability" | "auto" | "playwright";
+
+/* Converts persisted URL extraction settings into a supported local strategy. */
+export function toUrlFetchMethod(value: unknown): UrlFetchMethod {
+  // "basic" was the original UI value. Treat it as the safer modern default so
+  // existing configurations are upgraded without requiring user action.
+  if (value === "readability" || value === "auto" || value === "playwright") return value;
+  return "auto";
+}
 
 export interface CoreSettings {
   engine: Engine;
@@ -23,7 +34,11 @@ export interface CoreSettings {
   persona: string;
   vaultDir: string;
   extraDirs: string[];
-  urlFetchMethod?: UrlFetchMethod;
+  urlFetchMethod: UrlFetchMethod;
+  // Web research stays opt-in because agents can make outbound requests only
+  // through the local SearXNG service configured below.
+  webResearchEnabled: boolean;
+  searxngUrl: string;
 }
 
 export const DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6";

@@ -8,6 +8,7 @@ import {
   defaultEngineReasoning,
   effectiveEngineModel,
   effectiveEngineReasoning,
+  toUrlFetchMethod,
   mergeEngineSettings,
   normalizeEngineSettings,
   toEffort,
@@ -86,6 +87,9 @@ export function defaultSettings(vaultDir = DEFAULT_VAULT): ServerSettings {
     persona: DEFAULT_PERSONA,
     vaultDir,
     extraDirs: [],
+    urlFetchMethod: "auto",
+    webResearchEnabled: false,
+    searxngUrl: "http://127.0.0.1:8080",
   };
 }
 
@@ -101,6 +105,9 @@ export function normalizeServerSettings(saved: Partial<ServerSettings> = {}, vau
     ...engineSettings,
     vaultDir: raw.vaultDir || vaultDir,
     extraDirs: Array.isArray(raw.extraDirs) ? raw.extraDirs : [],
+    urlFetchMethod: toUrlFetchMethod(raw.urlFetchMethod),
+    webResearchEnabled: raw.webResearchEnabled === true,
+    searxngUrl: typeof raw.searxngUrl === "string" ? raw.searxngUrl.trim() : base.searxngUrl,
   };
 }
 
@@ -123,21 +130,35 @@ export function claudeReasoningTokens(settings: ServerSettings): number {
   return REASONING[effort ?? settings.effort] ?? REASONING.medium;
 }
 
-// A skill the user has chosen to apply to this interaction. Only the name and a
-// short description are needed for the prompt note; the agent invokes it by name
-// through the Skill tool.
+// A complete skill selected by the user for one interaction. The complete
+// SKILL.md is intentionally carried with the prompt: external CLIs do not share
+// Claude's native Skill tool, so inline instructions are the portable contract.
 export interface SkillNote {
   name: string;
   description: string;
+  instructions: string;
 }
 
-// Render the SKILLS section of the system-prompt append from the user's selected
-// skills. Returns "" when nothing is selected.
-/* Renders selected skills as an instruction block for the model's system prompt. */
+// Render a self-contained skill block that can be attached to either Claude's
+// system prompt or a CLI's stdin prompt. The delimiters retain each skill's
+// boundaries and make it clear that the body was explicitly selected by the user.
+/* Renders portable, inline instructions for the selected skills. */
 export function buildSkillsNote(skills: SkillNote[] | undefined): string {
   if (!skills?.length) return "";
-  const lines = skills.map((s) => `  - ${s.name}: ${s.description || "(no description)"}`);
-  return `SKILLS\n- Apply the following skills with the Skill tool wherever they are relevant to this task. Invoke each by name:\n${lines.join("\n")}`;
+  const bundles = skills.map(
+    (skill) =>
+      `--- BEGIN USER-SELECTED SKILL: ${skill.name} ---\n${skill.instructions.trim()}\n--- END USER-SELECTED SKILL: ${skill.name} ---`
+  );
+  return `SELECTED SKILL INSTRUCTIONS\n- The user explicitly selected the complete skills below. Apply their relevant instructions directly.\n- The instructions are embedded for portability; do not rely on a native Skill tool or filesystem access to retrieve them.\n- Obey the task's safety, tool, and output constraints when a skill conflicts with them.\n\n${bundles.join("\n\n")}`;
+}
+
+// CLI engines accept one stdin prompt rather than Claude's system-prompt append.
+// Prefix the same portable bundle here so every supported engine receives exactly
+// the selected instructions without requiring agent-specific skill installation.
+/* Prepends selected skill instructions to a self-contained CLI task prompt. */
+export function injectSkillsIntoPrompt(prompt: string, skills: SkillNote[] | undefined): string {
+  const note = buildSkillsNote(skills);
+  return note ? `${note}\n\nTASK\n${prompt}` : prompt;
 }
 
 interface BuildArgs {
@@ -246,7 +267,10 @@ const HUMANIZE_INLINE = `Rewrite the answer below to remove all signs of AI writ
 - Keep it concrete and specific.
 Output ONLY the rewritten answer.`;
 
-const NO_TOOLS = `Do not use any tools, do not run any shell commands, and do not read or write any files. Use ONLY the VAULT CONTEXT provided above as your source of facts.`;
+// CLI agents stay sandboxed. When the opt-in LOCAL WEB RESEARCH SKILL is present,
+// its two tagged JSON requests are the sole exception; the mediator executes them
+// rather than giving the model shell, browser, filesystem, or network access.
+const NO_TOOLS = `Do not use any tools directly, do not run any shell commands, and do not read or write any files. Use ONLY the VAULT CONTEXT provided above as your source of facts, unless the separately supplied LOCAL WEB RESEARCH SKILL returns mediated web evidence.`;
 
 /* Wraps retrieved vault text in a clearly delimited prompt section. */
 function contextBlock(context: string): string {
@@ -407,6 +431,63 @@ Fix any spelling, grammar, and punctuation errors. Improve the structure with ap
 Output ONLY the cleaned markdown — no commentary.
 
 ${NO_TOOLS}`;
+}
+
+// ---- Skill authoring prompts ----
+// The skill-creator guide is attached to the system prompt (Claude) or folded into
+// the task prompt (CLI engines); these builders supply just the task half. The model
+// returns one complete SKILL.md so the server can parse it back into editable fields.
+
+const SKILL_OUTPUT_RULES = `Output ONLY the complete SKILL.md file contents: the YAML frontmatter block (opening with --- and closing with ---, containing at least \`name\` and \`description\`), followed by the Markdown body. Do not wrap it in code fences. Do not add commentary before or after it.`;
+
+/* Builds the task prompt that turns a plain-language description into a SKILL.md. */
+export function buildGenerateSkillPrompt(description: string): string {
+  return `Write a complete SKILL.md for the skill described below, following the skill-creator authoring guide.
+
+Skill description:
+"""
+${description.trim()}
+"""
+
+Choose a fitting kebab-case \`name\`, write a sharp, trigger-rich \`description\`, and write a focused Markdown body of instructions.
+
+${SKILL_OUTPUT_RULES}`;
+}
+
+interface SkillDraft {
+  name: string;
+  description: string;
+  body: string;
+}
+
+/* Rebuilds a SKILL.md document from its parsed parts for a revision prompt. */
+function renderSkillDoc(draft: SkillDraft): string {
+  const name = draft.name.trim();
+  const description = draft.description.trim();
+  const front = `---\n${name ? `name: ${name}\n` : ""}${description ? `description: ${description}\n` : ""}---`;
+  return `${front}\n\n${draft.body.trim()}\n`;
+}
+
+/* Builds the task prompt that revises an existing SKILL.md from user feedback. */
+export function buildRewriteSkillPrompt(current: SkillDraft, feedback: string): string {
+  const keepName = current.name.trim()
+    ? `Keep the name \`${current.name.trim()}\` unless the requested change is specifically about the name.`
+    : "";
+  return `Revise the SKILL.md below based on the requested change, following the skill-creator authoring guide. ${keepName}
+
+Current SKILL.md:
+"""
+${renderSkillDoc(current)}
+"""
+
+Requested change:
+"""
+${feedback.trim()}
+"""
+
+Apply the change, then re-read the whole skill so it still reads as one coherent document.
+
+${SKILL_OUTPUT_RULES}`;
 }
 
 // ---- Global config persistence ----

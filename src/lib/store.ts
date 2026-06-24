@@ -3,6 +3,7 @@ import {
   DEFAULT_CLEANUP_MODEL,
   mergeEngineSettings,
   normalizeEngineSettings,
+  toUrlFetchMethod,
   type CoreSettings,
   type Engine,
   type TabMode,
@@ -99,7 +100,9 @@ export function normalizeSettings(raw: Partial<Settings>): Settings {
     vaultDir: raw.vaultDir ?? "",
     extraDirs: Array.isArray(raw.extraDirs) ? raw.extraDirs : [],
     design: raw.design ?? DEFAULT_DESIGN,
-    urlFetchMethod: raw.urlFetchMethod ?? "basic",
+    urlFetchMethod: toUrlFetchMethod(raw.urlFetchMethod),
+    webResearchEnabled: raw.webResearchEnabled ?? false,
+    searxngUrl: typeof raw.searxngUrl === "string" ? raw.searxngUrl : "http://127.0.0.1:8080",
   };
 }
 

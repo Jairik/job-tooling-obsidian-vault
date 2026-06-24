@@ -22,14 +22,16 @@ UI and a small JSON + SSE API, and drives the model.
 | Agent pipeline | `agent/runner.ts` | Draft turn → humanize turn; manages one session per tab. |
 | Config & prompts | `agent/config.ts` | Defaults, model list, persona, and prompt builders. |
 | Retrieval (RAG) | `agent/rag.ts` | Pure-Bun BM25 retrieval over the vault. See [rag.md](rag.md). |
+| Web research | `agent/web.ts` | Local SearXNG search plus Readability/Chromium page resolution, mediated for every agent. See [web-research.md](web-research.md). |
 | Engines | `agent/gemini.ts` | Optional `agy` (Gemini Antigravity) engine. |
-| Skills | `agent/skills.ts` | Discovers installed skills (`~/.claude/skills` + vault `.claude/skills`), creates new ones, and detects `humanizer` for the humanize pass. Selected skills run via the `Skill` tool. |
+| Skills | `agent/skills.ts` | Discovers installed skills (`~/.claude/skills` + vault `.claude/skills`), creates new ones, and detects `humanizer` for the humanize pass. Selected `SKILL.md` instructions are embedded for every engine. |
 | UI | `src/` | React app: tabs, settings, activity log, answer stream. |
 
 ## Docs in this folder
 
 - [architecture.md](architecture.md) — how a request flows from the UI to an answer.
 - [rag.md](rag.md) — the RAG retrieval feature and the **RAG** toggle.
+- [web-research.md](web-research.md) — free local search and web-page resolution.
 - [design.md](design.md) — the design system, tokens, theming, and components.
 
 ## Key ideas

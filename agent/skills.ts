@@ -1,4 +1,8 @@
-/* Discovers and creates Claude Code skills in user and vault-local SKILL.md folders. */
+/*
+ * Discovers and creates portable SKILL.md skills in user and vault-local folders.
+ * The storage convention remains Claude-compatible, but selected instructions are
+ * embedded in every engine's prompt so no particular agent runtime is required.
+ */
 import { homedir } from "os";
 import { join, resolve } from "path";
 import { readdirSync, readFileSync } from "fs";
@@ -42,6 +46,17 @@ export interface SkillInfo {
   description: string;
   scope: SkillScope;
   path: string; // absolute path to the skill's SKILL.md
+}
+
+/*
+ * The complete instruction payload for a skill selected in the UI. Keeping the
+ * document with its metadata means a non-Claude CLI receives the same guidance
+ * a native Claude Skill invocation would start with.
+ */
+export interface LoadedSkill {
+  name: string;
+  description: string;
+  instructions: string;
 }
 
 const SKILL_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
@@ -122,8 +137,8 @@ function scanScope(scope: SkillScope, vaultDir: string): SkillInfo[] {
 }
 
 // List every installed skill across user + vault scope. User scope is scanned
-// first; a vault skill sharing a name is dropped so each name appears once.
-/* Lists both scopes, allowing a vault-local skill to override a global duplicate. */
+// first, so a global skill wins when both scopes contain the same display name.
+/* Lists both scopes while exposing at most one selectable skill per name. */
 export async function listSkills(vaultDir: string): Promise<SkillInfo[]> {
   const all = [...scanScope("user", vaultDir), ...scanScope("vault", vaultDir)];
   const byName = new Map<string, SkillInfo>();
@@ -131,6 +146,120 @@ export async function listSkills(vaultDir: string): Promise<SkillInfo[]> {
     if (!byName.has(s.name)) byName.set(s.name, s);
   }
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/*
+ * Loads the complete SKILL.md text for user-selected names. Callers receive
+ * missing and unreadable names separately so they can explain exactly why a
+ * requested skill was not included instead of silently dropping it.
+ */
+export async function loadSelectedSkills(
+  vaultDir: string,
+  names: string[] | undefined
+): Promise<{ skills: LoadedSkill[]; missing: string[]; unreadable: string[] }> {
+  const selected = [...new Set(names ?? [])];
+  if (!selected.length) return { skills: [], missing: [], unreadable: [] };
+
+  const byName = new Map((await listSkills(vaultDir)).map((skill) => [skill.name, skill]));
+  const skills: LoadedSkill[] = [];
+  const missing: string[] = [];
+  const unreadable: string[] = [];
+
+  for (const name of selected) {
+    const info = byName.get(name);
+    if (!info) {
+      missing.push(name);
+      continue;
+    }
+
+    try {
+      const instructions = await Bun.file(info.path).text();
+      if (!instructions.trim()) {
+        unreadable.push(name);
+        continue;
+      }
+      skills.push({ name: info.name, description: info.description, instructions });
+    } catch {
+      unreadable.push(name);
+    }
+  }
+
+  return { skills, missing, unreadable };
+}
+
+// The bundled authoring guide the agent reads when writing a skill from a
+// plain-language description. It ships with the app so generation works for every
+// engine without depending on a skill-creator plugin being installed on the host.
+const SKILL_CREATOR_PATH = join(import.meta.dir, "skills", "skill-creator", "SKILL.md");
+
+/*
+ * Loads the bundled skill-creator guide as a portable instruction bundle. The full
+ * document is carried inline so it can be injected into any engine's prompt the same
+ * way user-selected skills are.
+ */
+export async function loadSkillCreatorGuide(): Promise<LoadedSkill> {
+  const instructions = await Bun.file(SKILL_CREATOR_PATH).text();
+  return {
+    name: "skill-creator",
+    description: "Author a single portable SKILL.md from a plain-language description.",
+    instructions,
+  };
+}
+
+export interface GeneratedSkill {
+  name: string;
+  description: string;
+  body: string;
+}
+
+// Pull a complete generated SKILL.md apart into the three fields the UI edits.
+// Unlike parseFrontmatter (which is tuned for the picker and truncates), this keeps
+// the full description and body so what the user sees is exactly what gets saved.
+/* Splits a generated SKILL.md document into editable name, description, and body. */
+export function parseGeneratedSkill(raw: string): GeneratedSkill {
+  let text = (raw || "").trim();
+
+  // Models sometimes wrap the whole document in a ```markdown fence — unwrap it.
+  const fenced = text.match(/^```[a-zA-Z]*\n([\s\S]*?)\n```$/);
+  if (fenced) text = fenced[1].trim();
+
+  const fm = text.match(/^---\n([\s\S]*?)\n---\n?/);
+  if (!fm) {
+    return { name: "", description: "", body: text };
+  }
+
+  const header = fm[1];
+  const body = text.slice(fm[0].length).trim();
+  const lines = header.split("\n");
+
+  let name = "";
+  let description = "";
+
+  for (let i = 0; i < lines.length; i++) {
+    const nameMatch = lines[i].match(/^name:\s*(.+)$/);
+    if (nameMatch) {
+      name = nameMatch[1].trim().replace(/^["']|["']$/g, "");
+      continue;
+    }
+    const descMatch = lines[i].match(/^description:\s*(.*)$/);
+    if (descMatch) {
+      const inline = descMatch[1].trim();
+      if (inline && inline !== "|" && inline !== ">" && inline !== "|-" && inline !== ">-") {
+        description = inline.replace(/^["']|["']$/g, "");
+      } else {
+        // Block scalar: gather the following more-indented lines.
+        const collected: string[] = [];
+        for (let j = i + 1; j < lines.length; j++) {
+          if (/^\s+\S/.test(lines[j])) collected.push(lines[j].trim());
+          else if (lines[j].trim() === "") collected.push("");
+          else break;
+        }
+        description = collected.join(" ").trim();
+      }
+    }
+  }
+
+  return { name, description: description.replace(/\s+/g, " ").trim(), body };
 }
 
 export interface CreateSkillArgs {
