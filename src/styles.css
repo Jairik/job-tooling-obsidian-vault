@@ -673,6 +673,27 @@ textarea:focus, input:focus, select:focus { border-color: var(--accent); box-sha
 .toggle-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--r-md); border: 1px solid var(--border); background: var(--surface-2); font-size: 13.5px; }
 .toggle-row input { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
 
+/* Settings → Help page + first-run walkthrough (shared HelpGuide content) */
+.help-welcome { max-width: 620px; }
+.help-intro { margin: 0; font-size: 13px; line-height: 1.65; color: var(--muted); }
+.help-modes { display: flex; flex-direction: column; gap: 10px; }
+.help-mode { padding: 12px 14px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md); }
+.help-mode-hd { display: flex; align-items: center; gap: 9px; }
+.help-mode-badge { font-family: var(--font-mono); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; padding: 2px 8px; border-radius: var(--r-pill); background: var(--accent-sub); color: var(--accent); }
+.help-mode-title { font-size: 14px; font-weight: 600; color: var(--fg); letter-spacing: -0.01em; }
+.help-mode-blurb { margin: 8px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--muted); }
+.help-steps { margin: 8px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.help-steps li { font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+.help-steps-lg { margin: 0; }
+.help-steps strong, .help-mode-blurb strong, .help-topic-desc strong { color: var(--fg); font-weight: 600; }
+.help-topic { display: flex; gap: 11px; padding: 12px 14px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md); }
+.help-topic-ic { flex-shrink: 0; width: 28px; height: 28px; display: grid; place-items: center; border-radius: var(--r-sm); background: var(--surface-3); color: var(--accent); }
+.help-topic-bd { min-width: 0; }
+.help-topic-title { font-size: 13.5px; font-weight: 600; color: var(--fg); letter-spacing: -0.01em; }
+.help-topic-desc { font-size: 12.5px; line-height: 1.55; color: var(--muted); margin-top: 3px; }
+.help-topic-desc code { font-family: var(--font-mono); font-size: 11.5px; background: var(--surface-3); padding: 1px 5px; border-radius: var(--r-sm); }
+.help-topic-desc em { font-style: normal; font-weight: 600; color: var(--fg); }
+
 /* Usage panel */
 .usage-panel { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
 .usage-panel .btn { align-self: flex-start; }

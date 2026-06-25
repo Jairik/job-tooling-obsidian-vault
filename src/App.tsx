@@ -37,6 +37,7 @@ import { TabBar } from "./components/TabBar";
 import { TabView } from "./components/TabView";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { Onboarding } from "./components/Onboarding";
+import { HelpGuide } from "./components/HelpGuide";
 import { QuickNotes } from "./components/QuickNotes";
 import { FunBackground } from "./components/FunBackground";
 import { createConversationActions } from "./lib/conversation-actions";
@@ -72,7 +73,13 @@ export function App() {
   const [skills, setSkills] = useState({ humanizer: false, gemini: false, opencode: false, cursor: false, copilot: false, codex: false });
   const [availableSkills, setAvailableSkills] = useState<SkillInfo[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // When true, the Settings panel opens straight to the Help page (set by the
+  // first-run welcome modal's "Explore settings" action).
+  const [settingsToHelp, setSettingsToHelp] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
+  // First-run walkthrough: shown once after onboarding, tracked by a local flag so
+  // it never re-appears. The same content also lives under Settings → Help.
+  const [helpSeen, setHelpSeen] = useState<boolean>(() => readLS("jt.help.v1") === "seen");
   const [toolbarDropOpen, setToolbarDropOpen] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>(() => loadLogs());
   const [theme, setTheme] = useState<"dark" | "light">(
@@ -154,6 +161,23 @@ export function App() {
   useEffect(() => {
     writeLS("jt.defaultmode", defaultMode);
   }, [defaultMode]);
+
+  // Dismiss the first-run walkthrough and remember it so it never shows again.
+  const dismissHelp = () => {
+    writeLS("jt.help.v1", "seen");
+    setHelpSeen(true);
+  };
+
+  // Escape closes the first-run walkthrough, but only while it is the modal on top
+  // (onboarding owns Escape until the user is onboarded).
+  useEffect(() => {
+    if (helpSeen || !settings?.onboarded) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") dismissHelp();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [helpSeen, settings?.onboarded]);
 
   // Initial load: server config (authoritative) merged with anything saved locally.
   useEffect(() => {
@@ -761,7 +785,11 @@ export function App() {
             api.clearLogs().catch(() => {});
             setLogs([]);
           }}
-          onClose={() => setSettingsOpen(false)}
+          initialPage={settingsToHelp ? "help" : "general"}
+          onClose={() => {
+            setSettingsOpen(false);
+            setSettingsToHelp(false);
+          }}
         />
       )}
 
@@ -773,6 +801,39 @@ export function App() {
           onComplete={(patch) => changeSettings(patch)}
           onSkip={() => changeSettings({ onboarded: true })}
         />
+      )}
+
+      {/* First-run walkthrough: shown once after onboarding completes. The same
+          content is always available under Settings → Help. */}
+      {settings && settings.onboarded && !helpSeen && (
+        <div className="modal-wrap" onClick={dismissHelp}>
+          <div className="onboard-card help-welcome" onClick={(e) => e.stopPropagation()}>
+            <div className="onboard-hd">
+              <h2 className="onboard-title">How Vault Assistant works</h2>
+              <p className="onboard-sub">
+                A quick tour of what you can do. You can reopen this anytime from Settings → Help.
+              </p>
+            </div>
+            <div className="onboard-body">
+              <HelpGuide />
+            </div>
+            <div className="onboard-foot">
+              <button
+                className="btn btn-ghost"
+                onClick={() => {
+                  dismissHelp();
+                  setSettingsToHelp(true);
+                  setSettingsOpen(true);
+                }}
+              >
+                Explore settings
+              </button>
+              <button className="btn btn-primary" onClick={dismissHelp}>
+                Got it
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -12,9 +12,10 @@ import { loadFont } from "../lib/fonts";
 import { UsagePanel } from "./UsagePanel";
 import { LogsView } from "./LogsView";
 import { DesignSettingsSection } from "./DesignSettingsSection";
+import { HelpGuide } from "./HelpGuide";
 
 type CreateSkillResult = { ok: boolean; error?: string };
-type PageId = "general" | "vault" | "persona" | "engine" | "rag" | "skills" | "appearance" | "usage" | "logs";
+type PageId = "general" | "vault" | "persona" | "engine" | "rag" | "skills" | "appearance" | "usage" | "logs" | "help";
 
 interface Props {
   settings: Settings;
@@ -36,6 +37,7 @@ interface Props {
   onRefreshSkills: () => void;
   onClearLogs: () => void;
   onClose: () => void;
+  initialPage?: PageId;
 }
 
 interface VaultState {
@@ -94,11 +96,18 @@ const NAV: { group: string; items: { id: PageId; label: string; icon: ReactNode 
       { id: "usage", label: "Usage", icon: (<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /></svg>) },
     ],
   },
+  {
+    group: "Help",
+    items: [
+      { id: "help", label: "Getting started", icon: (<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" /><line x1="12" y1="17" x2="12.01" y2="17" /></svg>) },
+    ],
+  },
 ];
 
 const PAGE_TITLE: Record<PageId, string> = {
   general: "General", vault: "Vault", persona: "Persona", engine: "AI Engine",
   rag: "RAG / Retrieval", skills: "Skills", appearance: "Appearance", logs: "Logs", usage: "Usage",
+  help: "Getting started",
 };
 
 /* Maps an internal engine identifier to the executable users need to install. */
@@ -128,8 +137,9 @@ export function SettingsPanel({
   onRefreshSkills,
   onClearLogs,
   onClose,
+  initialPage = "general",
 }: Props) {
-  const [page, setPage] = useState<PageId>("general");
+  const [page, setPage] = useState<PageId>(initialPage);
   const [vaultInput, setVaultInput] = useState(settings.vaultDir);
   const [vault, setVault] = useState<VaultState | null>(null);
   const [skillFilter, setSkillFilter] = useState("");
@@ -868,6 +878,13 @@ export function SettingsPanel({
                     Live Claude Code subscription usage — the same limits the CLI's <code>/usage</code> command reports.
                   </div>
                 </div>
+              </div>
+            )}
+
+            {/* ── HELP ── */}
+            {page === "help" && (
+              <div className="s-page">
+                <HelpGuide />
               </div>
             )}
           </div>
