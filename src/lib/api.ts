@@ -1,7 +1,7 @@
 // Tiny API client. Streaming endpoints are POST + SSE, so we read the response
 // body manually (EventSource only supports GET).
 import type { SkillInfo, LogEntry, UrlFetchMethod } from "./store";
-import type { UsageResult } from "../../shared/usage";
+import type { UsageResult, UsageTarget } from "../../shared/usage";
 
 export type SSEHandlers = Record<string, (data: any) => void>;
 
@@ -106,8 +106,11 @@ export const api = {
     fetch(`/api/vault/validate?path=${encodeURIComponent(path)}`).then((r) => r.json()),
   cancel: (id: string): Promise<unknown> => fetch(`/api/tabs/${id}/cancel`, { method: "POST" }),
 
-  /* Current Claude Code usage, mirroring the CLI's `/usage` command. */
-  usage: (): Promise<UsageResult> => fetch("/api/usage").then((r) => r.json()),
+  /* Current usage for the selected engine/model when a compatible provider exists. */
+  usage: (target?: UsageTarget): Promise<UsageResult> => {
+    const query = target ? `?${new URLSearchParams({ engine: target.engine, model: target.model })}` : "";
+    return fetch(`/api/usage${query}`).then((r) => r.json());
+  },
 
   /* Durable activity log persisted server-side to a local file. */
   getLogs: (): Promise<LogEntry[]> => fetch("/api/logs").then((r) => r.json()),

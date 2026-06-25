@@ -15,7 +15,7 @@ import { DesignSettingsSection } from "./DesignSettingsSection";
 import { HelpGuide } from "./HelpGuide";
 
 type CreateSkillResult = { ok: boolean; error?: string };
-type PageId = "general" | "vault" | "persona" | "engine" | "rag" | "skills" | "appearance" | "usage" | "logs" | "help";
+type PageId = "general" | "vault" | "persona" | "engine" | "rag" | "skills" | "appearance" | "logs" | "help";
 
 interface Props {
   settings: Settings;
@@ -93,7 +93,6 @@ const NAV: { group: string; items: { id: PageId; label: string; icon: ReactNode 
     items: [
       { id: "appearance", label: "Appearance", icon: (<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></svg>) },
       { id: "logs", label: "Logs", icon: (<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></svg>) },
-      { id: "usage", label: "Usage", icon: (<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /></svg>) },
     ],
   },
   {
@@ -106,7 +105,7 @@ const NAV: { group: string; items: { id: PageId; label: string; icon: ReactNode 
 
 const PAGE_TITLE: Record<PageId, string> = {
   general: "General", vault: "Vault", persona: "Persona", engine: "AI Engine",
-  rag: "RAG / Retrieval", skills: "Skills", appearance: "Appearance", logs: "Logs", usage: "Usage",
+  rag: "RAG / Retrieval", skills: "Skills", appearance: "Appearance", logs: "Logs",
   help: "Getting started",
 };
 
@@ -600,6 +599,11 @@ export function SettingsPanel({
                     </div>
                   )}
                 </div>
+
+                <div className="s-section">
+                  <span className="s-section-lbl">Usage</span>
+                  <UsagePanel engine={settings.engine} model={currentModel} />
+                </div>
               </div>
             )}
 
@@ -864,19 +868,6 @@ export function SettingsPanel({
                 <div className="s-section">
                   <span className="s-section-lbl">Activity</span>
                   <LogsView logs={logs} onClear={onClearLogs} />
-                </div>
-              </div>
-            )}
-
-            {/* ── USAGE ── */}
-            {page === "usage" && (
-              <div className="s-page">
-                <div className="s-section">
-                  <span className="s-section-lbl">Session</span>
-                  <UsagePanel />
-                  <div className="notice small">
-                    Live Claude Code subscription usage — the same limits the CLI's <code>/usage</code> command reports.
-                  </div>
                 </div>
               </div>
             )}

@@ -4,9 +4,10 @@ import { generate, followUp, cleanup, cancel, loadSessions, summarize, autoPlace
 import { detectSkills, listSkills, createSkill } from "./agent/skills";
 import { geminiAvailable, cliAvailable } from "./agent/gemini";
 import { readLogs, appendLog, clearLogs } from "./agent/logs";
-import { fetchClaudeUsage } from "./agent/usage";
+import { fetchUsageForTarget } from "./agent/usage";
 import { resolveWebPage } from "./agent/web";
 import { loadConfig, saveConfig, defaultSettings, mergeServerSettings, MODELS, ENGINES, DEFAULT_VAULT, type ServerSettings } from "./agent/config";
+import { effectiveEngineModel } from "./shared/settings";
 import { stat } from "fs/promises";
 
 const PORT = Number(process.env.PORT || 5173);
@@ -62,6 +63,11 @@ async function resolveSettings(override: Partial<ServerSettings> | undefined): P
   return merged;
 }
 
+/* Converts a client-supplied usage target into a known engine id. */
+function usageEngine(value: string | null, fallback: ServerSettings["engine"]): ServerSettings["engine"] {
+  return ENGINES.some((engine) => engine.id === value) ? (value as ServerSettings["engine"]) : fallback;
+}
+
 const server = Bun.serve({
   port: PORT,
   development: DEV,
@@ -98,8 +104,16 @@ const server = Bun.serve({
       },
     },
 
-    // Current Claude Code subscription usage (the data the CLI's /usage shows).
-    "/api/usage": async () => Response.json(await fetchClaudeUsage()),
+    // Current usage for the selected engine/model when a compatible provider exists.
+    "/api/usage": async (req) => {
+      const settings = await loadConfig();
+      const url = new URL(req.url);
+      const engine = usageEngine(url.searchParams.get("engine"), settings.engine);
+      const model = url.searchParams.has("model")
+        ? url.searchParams.get("model") ?? ""
+        : effectiveEngineModel(settings, engine);
+      return Response.json(await fetchUsageForTarget({ engine, model }));
+    },
 
     "/api/skills/status": async (req) => {
       const url = new URL(req.url);

@@ -26,8 +26,10 @@ import {
 } from "./config";
 import { loadSelectedSkills } from "./skills";
 import { buildWebResearchSkill, parseWebToolRequest, resolveWebPage, webResearchEnabled } from "./web";
+import { fetchUsageForTarget, parseCodexProfileStats, parseCodexUsagePayload, parseOpenCodeStats } from "./usage";
 import { effectiveEngineModel, effectiveEngineReasoning } from "../shared/settings";
 import { defaultEngineModels, defaultEngineReasoning } from "../shared/settings";
+import { isClaudeUsageModel, usageSupportForTarget } from "../shared/usage";
 import { normalizeSettings as normalizeClientSettings } from "../src/lib/store";
 import { mkdir, mkdtemp, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
@@ -211,6 +213,108 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
     expect(client.engineModels).toEqual(defaultEngineModels());
     expect(server.engineReasoning).toEqual(defaultEngineReasoning());
     expect(client.engineReasoning).toEqual(defaultEngineReasoning());
+  });
+
+  test("usage checker targets any compatible selected model", async () => {
+    expect(isClaudeUsageModel("claude-sonnet-4-6")).toBe(true);
+    expect(isClaudeUsageModel("auto")).toBe(true);
+    expect(isClaudeUsageModel("gpt-5.2-codex")).toBe(false);
+
+    expect(usageSupportForTarget({ engine: "claude", model: "claude-custom-model" })).toMatchObject({
+      supported: true,
+      provider: "claude-code",
+    });
+
+    expect(usageSupportForTarget({ engine: "codex", model: "gpt-5.2-codex" })).toMatchObject({
+      supported: true,
+      provider: "codex",
+    });
+
+    expect(usageSupportForTarget({ engine: "opencode", model: "openai/gpt-5.2" })).toMatchObject({
+      supported: true,
+      provider: "opencode",
+    });
+
+    const unsupported = await fetchUsageForTarget({ engine: "gemini", model: "gemini-2.5-pro" });
+    expect(unsupported).toMatchObject({
+      ok: false,
+      unsupported: true,
+      target: { engine: "gemini", model: "gemini-2.5-pro" },
+    });
+  });
+
+  test("normalizes Codex usage payloads into generic usage windows and stats", () => {
+    const parsed = parseCodexUsagePayload({
+      plan_type: "pro",
+      rate_limit: {
+        primary_window: { used_percent: 42, limit_window_seconds: 300, reset_at: 1893456000 },
+        secondary_window: { used_percent: 84, limit_window_seconds: 3600, reset_at: 1893459600 },
+      },
+      additional_rate_limits: [
+        {
+          limit_name: "codex_other",
+          metered_feature: "codex_other",
+          rate_limit: {
+            primary_window: { used_percent: 70, limit_window_seconds: 900, reset_at: 1893463200 },
+          },
+        },
+      ],
+      credits: { has_credits: true, unlimited: false, balance: "9.99" },
+      rate_limit_reset_credits: { available_count: 3 },
+      spend_control: {
+        individual_limit: { limit: "25000", used: "8000", remaining_percent: 68 },
+      },
+    });
+
+    expect(parsed.windows).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        label: "Codex primary",
+        utilization: 42,
+        resetsAt: "2030-01-01T00:00:00.000Z",
+        detail: "5m window",
+      }),
+      expect.objectContaining({
+        label: "Codex Other primary",
+        utilization: 70,
+        detail: "15m window",
+      }),
+    ]));
+    expect(parsed.stats).toEqual(expect.arrayContaining([
+      { label: "Plan", value: "Pro" },
+      { label: "Credits", value: "$9.99" },
+      { label: "Reset credits", value: "3" },
+      { label: "Usage limit", value: "8000 / 25000 · 68% remaining" },
+    ]));
+
+    expect(parseCodexProfileStats({
+      stats: {
+        lifetime_tokens: 1234567,
+        current_streak_days: 5,
+        daily_usage_buckets: [{ start_date: "2030-01-01", tokens: 1200 }],
+      },
+    })).toEqual(expect.arrayContaining([
+      { label: "Lifetime tokens", value: "1,234,567" },
+      { label: "Current streak", value: "5d" },
+      { label: "Tokens on 2030-01-01", value: "1,200" },
+    ]));
+  });
+
+  test("parses OpenCode stats output into display rows", () => {
+    const stats = parseOpenCodeStats(`
+Total cost: $1.23
+Total tokens: 12,345
+Input tokens: 10,000
+Output tokens: 2,345
+│ openai/gpt-5 │ $1.00 │ 10,000 tokens │
+`);
+
+    expect(stats).toEqual(expect.arrayContaining([
+      { label: "Total Cost", value: "$1.23" },
+      { label: "Total Tokens", value: "12,345" },
+      { label: "Input Tokens", value: "10,000" },
+      { label: "Output Tokens", value: "2,345" },
+      { label: "Openai/Gpt 5", value: "$1.00 · 10,000 tokens" },
+    ]));
   });
 
   test("CLI command builder passes custom model and reasoning settings", () => {
