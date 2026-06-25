@@ -19,6 +19,14 @@ That's it. Open http://localhost:5173.
 
 (Equivalent: `bun install && bun run dev`.)
 
+### First-run setup
+The first time you open the app (when there's no `config.json` yet) a short setup
+modal asks for your **name**, **role**, **vault path**, and optional **voice notes**,
+then generates a personalized system prompt from them. Everything is editable later
+under **Settings → Persona** (with a "Regenerate system prompt from profile" button),
+and your answers are saved to `config.json`, which is gitignored and so survives
+`git pull` updates. Press **Skip** to start with a neutral default prompt.
+
 ### Requirements
 - [Bun](https://bun.sh) (1.3+)
 - Claude Code installed and logged in (the app reuses your existing auth — no API
@@ -32,15 +40,17 @@ drawer has a checkbox to choose the default mode for new tabs.
 
 ### Ask mode (default)
 A Claude Code instance reads the relevant files in your vault and answers your
-question directly, grounded in what it finds — nothing fabricated. One turn, no
-auto-humanize. Follow-ups resume the same session.
+question directly, grounded in what it finds — nothing fabricated. When the
+**Humanize** skill is on (the default) the answer also gets a de-AI rewrite pass.
+Follow-ups resume the same session.
 
 ### Job mode
 The original job-application workflow:
 1. **Draft** — reads the vault (`JJ-master/Projects`, `Background`,
    `Leadership-Examples`, etc.) and writes a grounded, first-person answer.
-2. **Humanize** — the `humanizer` skill is run on the draft; the humanized version
-   becomes the final answer (the raw draft stays in a collapsible panel).
+2. **Humanize** — when the **Humanize** skill is on (default), the `humanizer` skill is
+   run on the draft; the humanized version becomes the final answer (the raw draft stays
+   in a collapsible panel).
 3. **Follow-ups** — type tweaks ("make it shorter", "lead with the Lunara project")
    and the same session is resumed.
 
@@ -92,6 +102,12 @@ Every user-selected `SKILL.md` is embedded in the request sent to Claude Code an
 each CLI engine, so skills work consistently without installing them separately for
 Codex, Antigravity, Cursor, Copilot, or OpenCode.
 
+**Pre-packaged skills** ship with the app and are toggled globally under **Settings →
+Skills**, separately from your installed user skills: **Humanize** (de-AI rewrite,
+default on — disabling may speed responses up at some quality cost; applies to every
+mode) and **Web-search research** (the on-demand local web search below). Your own
+discovered `SKILL.md` files are listed under "User skills" on the same page.
+
 ## Free local web research
 
 Optionally run a local [SearXNG](https://docs.searxng.org/) instance and enable
@@ -119,11 +135,12 @@ Everything is configurable, globally and per-tab:
 - **Model** (Claude only — default Sonnet; Opus / Haiku available)
 - **Cleanup model** (Claude only — lightweight model for the **Clean up** button; default Haiku)
 - **Reasoning effort** (Claude only — low / medium / high)
-- **Humanize** on/off (Job mode)
+- **Humanize** pre-packaged skill on/off (all modes; default on — under Skills)
+- **Web-search research** pre-packaged skill on/off (under Skills; SearXNG URL under Retrieval)
 - **RAG** retrieval on/off (default for new tabs; minimizes tokens)
-- **Local web research** (opt-in SearXNG URL plus local Readability/Chromium resolver)
 - **URL fetch method** (Readability, automatic Chromium fallback, or Chromium)
 - **Vault / context repo** path (+ extra context dirs) with live validation
+- **Profile** (name / role / voice notes) used to generate the system prompt
 - **Persona / system prompt** (the Job-mode grounding instructions)
 - **Max turns**
 

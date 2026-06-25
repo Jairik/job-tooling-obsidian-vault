@@ -43,10 +43,13 @@ const ASK_ICON = (
     <path d="M12 17.2h.01" />
   </svg>
 );
-const JOB_ICON = (
+const DRAFT_ICON = (
   <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="3" y="7" width="18" height="13" rx="2" />
-    <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+    <polyline points="14 2 14 8 20 8" />
+    <line x1="16" y1="13" x2="8" y2="13" />
+    <line x1="16" y1="17" x2="8" y2="17" />
+    <polyline points="10 9 9 9 8 9" />
   </svg>
 );
 const WRITE_ICON = (
@@ -106,9 +109,9 @@ export function TabView({ tab, globalSettings, models, engines, skills, availabl
           {ASK_ICON}
           Ask the vault
         </button>
-        <button className={`mode-btn ${tab.mode === "job" ? "active" : ""}`} onClick={() => onPatch({ mode: "job" })} title="Draft a job-application answer (grounded + humanized)">
-          {JOB_ICON}
-          Job mode
+        <button className={`mode-btn ${tab.mode === "job" ? "active" : ""}`} onClick={() => onPatch({ mode: "job" })} title="Create a grounded + humanized draft">
+          {DRAFT_ICON}
+          Drafting mode
         </button>
         <button className={`mode-btn ${isWrite ? "active" : ""}`} onClick={() => onPatch({ mode: "write" })} title="Write new entries to your vault">
           {WRITE_ICON}
@@ -142,11 +145,11 @@ export function TabView({ tab, globalSettings, models, engines, skills, availabl
           <div className="input-card">
             {!isAsk && (
               <div>
-                <label className="field-lbl">Job description</label>
+                <label className="field-lbl">Draft context / details</label>
                 <textarea
                   className="f-area"
                   rows={5}
-                  placeholder="Paste the job description (optional but recommended)…"
+                  placeholder="Paste context, details, or a job description (optional but recommended)…"
                   value={tab.jobDescription}
                   onChange={(e) => onPatch({ jobDescription: e.target.value })}
                 />
@@ -252,12 +255,6 @@ export function TabView({ tab, globalSettings, models, engines, skills, availabl
                     <option value="xhigh" />
                   </datalist>
                 </label>
-                {!isAsk && (
-                  <label className="field-row">
-                    <input type="checkbox" checked={ov.humanize} onChange={(e) => setOverride({ humanize: e.target.checked })} />
-                    <span>Humanize</span>
-                  </label>
-                )}
                 <label className="field wide">
                   <span>Vault / context repo (this tab)</span>
                   <input type="text" value={ov.vaultDir} spellCheck={false} onChange={(e) => setOverride({ vaultDir: e.target.value })} />
@@ -283,10 +280,10 @@ export function TabView({ tab, globalSettings, models, engines, skills, availabl
           {hasAnswer && (
             <div className="followup">
               <div className="followup-actions">
-                <span className="followup-label">Same job, another question?</span>
+                <span className="followup-label">Same context, another question?</span>
                 <button
                   className="btn-ghost"
-                  title="Open a new tab with this job description — a fresh conversation"
+                  title="Open a new tab with this draft context — a fresh conversation"
                   onClick={onNewQuestion}
                 >
                   + New question

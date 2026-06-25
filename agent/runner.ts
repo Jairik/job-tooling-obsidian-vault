@@ -7,7 +7,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { join } from "path";
 import {
   claudeReasoningTokens,
-  ASK_PERSONA,
+  resolveAskPersona,
   buildAppend,
   buildDraftPrompt,
   buildRagDraftPrompt,
@@ -346,7 +346,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
   const ragQuery = isAsk ? args.question : `${args.jobDescription}\n\n${args.question}`;
 
   if (isAsk) {
-    // ── Ask mode: a single grounded answer turn, no humanize pass ──────────
+    // ── Ask mode: a grounded answer turn, then an optional humanize pass ────
     let ragContext = "";
     if (args.rag) {
       ragContext = await retrieveForQuery(args.settings, ragQuery, emit);
@@ -357,6 +357,9 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
       }
     }
     const useRag = Boolean(ragContext);
+    // Reused by the draft and the humanize turn so both keep the Skill tool (for
+    // the humanizer) and the same file-browsing restriction under RAG.
+    const askTools = withSkillTool(useRag ? RAG_TOOLS : undefined, skillNotes.length > 0);
 
     emit("phase", { phase: "draft" });
     if (isCliEngine) {
@@ -369,7 +372,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
       let context = ragContext;
       if (!context) context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
       finalText = await runCliAgentTurn(args.settings.engine, {
-        prompt: buildCliAskPrompt(ASK_PERSONA, context, args.question),
+        prompt: buildCliAskPrompt(resolveAskPersona(args.settings), context, args.question),
         skills: skillNotes,
         phase: "draft",
         emit,
@@ -380,14 +383,45 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
       const ans = await runClaudeAgentTurn({
         prompt: useRag ? buildRagAskPrompt(ragContext, args.question) : buildAskPrompt(args.question),
         settings: args.settings,
-        append: buildAppend({ persona: ASK_PERSONA, mode: "ask", skills: skillNotes, useRag, phase: "draft" }),
-        allowedTools: withSkillTool(useRag ? RAG_TOOLS : undefined, skillNotes.length > 0),
+        append: buildAppend({ persona: resolveAskPersona(args.settings), mode: "ask", skills: skillNotes, useRag, phase: "draft" }),
+        allowedTools: askTools,
         phase: "draft",
         emit,
         abort,
       });
       finalText = ans.text;
       finalSession = ans.sessionId;
+    }
+
+    // The Humanize pre-packaged skill applies to every answer mode, so ask-mode
+    // answers also get the de-AI rewrite when it is enabled.
+    if (args.settings.humanize && finalText) {
+      emit("phase", { phase: "humanize" });
+      if (isCliEngine) {
+        const hum = await runCliTurn(args.settings.engine, {
+          prompt: buildCliHumanizePrompt(finalText),
+          skills: skillNotes,
+          phase: "humanize",
+          emit,
+          abort,
+          settings: args.settings,
+        });
+        if (hum) finalText = hum;
+      } else {
+        const hum = await runTurn({
+          prompt:
+            "Apply the humanizer skill to your previous answer. Return ONLY the final humanized version of the answer text — no commentary, no drafts, no audit notes.",
+          resume: finalSession,
+          settings: args.settings,
+          append: buildAppend({ persona: resolveAskPersona(args.settings), mode: "ask", skills: skillNotes, useRag, phase: "humanize" }),
+          allowedTools: askTools,
+          phase: "humanize",
+          emit,
+          abort,
+        });
+        if (hum.text) finalText = hum.text;
+        finalSession = hum.sessionId;
+      }
     }
 
     sessions.set(tabId, { sessionId: finalSession, abort: undefined, lastAnswer: finalText });
@@ -505,7 +539,7 @@ export async function followUp(tabId: string, args: FollowUpArgs, emit: Emit): P
 
   // Ask follow-ups keep the general assistant voice; job follow-ups keep the
   // configurable job persona. The resumed session re-receives this each turn.
-  const persona = args.mode === "ask" ? ASK_PERSONA : args.settings.persona;
+  const persona = args.mode === "ask" ? resolveAskPersona(args.settings) : args.settings.persona;
   const isCliEngine = args.settings.engine !== "claude";
   const skillNotes = await resolveSkillNotes(args.settings, args.skills, emit);
 

@@ -41,11 +41,14 @@ export function TabBar({ tabs, activeId, onSelect, onAdd, onClose, onClearAll, o
             onClick={() => onSelect(t.id)}
           >
             <span className={`t-dot ${dotClass}`} />
-            <span className="t-glyph" title={t.mode === "job" ? "Job mode" : "Ask mode"} aria-hidden>
+            <span className="t-glyph" title={t.mode === "job" ? "Drafting mode" : "Ask mode"} aria-hidden>
               {t.mode === "job" ? (
                 <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="3" y="7" width="18" height="13" rx="2" />
-                  <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                  <line x1="16" y1="13" x2="8" y2="13" />
+                  <line x1="16" y1="17" x2="8" y2="17" />
+                  <polyline points="10 9 9 9 8 9" />
                 </svg>
               ) : (
                 <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">

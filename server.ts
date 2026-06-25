@@ -8,7 +8,6 @@ import { fetchClaudeUsage } from "./agent/usage";
 import { resolveWebPage } from "./agent/web";
 import { loadConfig, saveConfig, defaultSettings, mergeServerSettings, MODELS, ENGINES, DEFAULT_VAULT, type ServerSettings } from "./agent/config";
 import { stat } from "fs/promises";
-import { join } from "path";
 
 const PORT = Number(process.env.PORT || 5173);
 const DEV = process.env.NODE_ENV !== "production";
@@ -170,30 +169,21 @@ const server = Bun.serve({
       },
     },
 
-    /* Checks whether a selected directory is usable and recognizably a JJ vault. */
+    // Checks whether a selected directory is usable as a vault and reports its
+    // top-level context folders (any user's vault layout — no fixed structure).
     "/api/vault/validate": async (req) => {
       const path = new URL(req.url).searchParams.get("path") || "";
-      const known = [
-        "JJ-master",
-        "JJ-master/Projects",
-        "JJ-master/Background",
-        "JJ-master/Leadership-Examples",
-        "JJ-master/Personal-Skills",
-        "JJ-master/QnA",
-      ];
+      const SKIP = new Set([".git", ".obsidian", "node_modules", ".trash"]);
       try {
         const s = await stat(path);
         if (!s.isDirectory()) {
           return Response.json({ valid: false, isDir: false, foundDirs: [], message: "Not a directory" });
         }
-        const foundDirs: string[] = [];
-        for (const d of known) {
-          try {
-            if ((await stat(join(path, d))).isDirectory()) foundDirs.push(d);
-          } catch {
-            /* missing */
-          }
-        }
+        const { readdirSync } = await import("fs");
+        const foundDirs = readdirSync(path, { withFileTypes: true })
+          .filter((ent) => ent.isDirectory() && !SKIP.has(ent.name) && !ent.name.startsWith("."))
+          .map((ent) => ent.name)
+          .sort((a, b) => a.localeCompare(b));
         return Response.json({ valid: true, isDir: true, foundDirs });
       } catch {
         return Response.json({ valid: false, isDir: false, foundDirs: [], message: "Path not found" });

@@ -36,6 +36,7 @@ import { api, streamPost, type ModelOption, type SSEHandlers } from "./lib/api";
 import { TabBar } from "./components/TabBar";
 import { TabView } from "./components/TabView";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { Onboarding } from "./components/Onboarding";
 import { QuickNotes } from "./components/QuickNotes";
 import { FunBackground } from "./components/FunBackground";
 import { createConversationActions } from "./lib/conversation-actions";
@@ -163,6 +164,9 @@ export function App() {
       const local = loadSettings();
       const base = normalizeSettings(config);
       const merged: Settings = local ? mergeSettings(base, local) : base;
+      // The server (config.json) is authoritative for first-run state, so stale
+      // localStorage from before this field existed can't re-trigger onboarding.
+      merged.onboarded = base.onboarded;
       setSettings(merged);
     })();
   }, []);
@@ -619,24 +623,7 @@ export function App() {
                       </span>
                       {split ? "Close split view" : "Split view"}
                     </button>
-                    <button
-                      className="toolbar-dropdown-item"
-                      onClick={() => { setTheme((t) => (t === "dark" ? "light" : "dark")); setToolbarDropOpen(false); }}
-                    >
-                      <span className="toolbar-dropdown-item-icon">
-                        {theme === "dark" ? (
-                          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-                          </svg>
-                        ) : (
-                          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                            <circle cx="12" cy="12" r="4" />
-                            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
-                          </svg>
-                        )}
-                      </span>
-                      {theme === "dark" ? "Light theme" : "Dark theme"}
-                    </button>
+
                     <button
                       className="toolbar-dropdown-item"
                       onClick={() => { setDensity((d) => (d === "compact" ? "comfortable" : "compact")); setToolbarDropOpen(false); }}
@@ -700,22 +687,7 @@ export function App() {
                   <path d="M14 3v5h5M9 13h6M9 17h4" />
                 </svg>
               </button>
-              <button
-                className="icon-btn"
-                title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-                onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
-              >
-                {theme === "dark" ? (
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-                  </svg>
-                ) : (
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                    <circle cx="12" cy="12" r="4" />
-                    <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
-                  </svg>
-                )}
-              </button>
+
               <button className="icon-btn" title="Settings" onClick={() => setSettingsOpen(true)}>
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                   <circle cx="12" cy="12" r="3" />
@@ -794,6 +766,14 @@ export function App() {
       )}
 
       {quickOpen && <QuickNotes onClose={() => setQuickOpen(false)} />}
+
+      {settings && !settings.onboarded && (
+        <Onboarding
+          initial={settings}
+          onComplete={(patch) => changeSettings(patch)}
+          onSkip={() => changeSettings({ onboarded: true })}
+        />
+      )}
     </div>
   );
 }

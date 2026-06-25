@@ -5,6 +5,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Settings, TabMode, DesignSettings, SkillInfo, LogEntry } from "../lib/store";
 import { effectiveEngineModel, effectiveEngineReasoning } from "../../shared/settings";
+import { buildJobPersona } from "../../shared/persona";
+import { PREPACKAGED_SKILLS } from "../../shared/prepackaged-skills";
 import { api, type ModelOption } from "../lib/api";
 import { loadFont } from "../lib/fonts";
 import { UsagePanel } from "./UsagePanel";
@@ -346,7 +348,7 @@ export function SettingsPanel({
                       onChange={(e) => onDefaultModeChange(e.target.value as TabMode)}
                     >
                       <option value="ask">Ask the vault</option>
-                      <option value="job">Job mode</option>
+                      <option value="job">Drafting mode</option>
                     </select>
                   </div>
                   <div className="s-row">
@@ -412,6 +414,58 @@ export function SettingsPanel({
             {page === "persona" && (
               <div className="s-page">
                 <div className="s-section">
+                  <span className="s-section-lbl">Profile</span>
+                  <div className="s-field">
+                    <div className="s-field-label">Your name</div>
+                    <div className="s-field-desc">Used when generating the system prompt.</div>
+                    <input
+                      className="s-input"
+                      type="text"
+                      value={settings.userName}
+                      spellCheck={false}
+                      placeholder="Jane Doe"
+                      onChange={(e) => onChange({ userName: e.target.value })}
+                    />
+                  </div>
+                  <div className="s-field">
+                    <div className="s-field-label">Your role</div>
+                    <div className="s-field-desc">How you'd describe yourself professionally.</div>
+                    <input
+                      className="s-input"
+                      type="text"
+                      value={settings.userRole}
+                      spellCheck={false}
+                      placeholder="a software engineer"
+                      onChange={(e) => onChange({ userRole: e.target.value })}
+                    />
+                  </div>
+                  <div className="s-field">
+                    <div className="s-field-label">Voice notes</div>
+                    <div className="s-field-desc">Optional tone/background notes folded into the prompt.</div>
+                    <textarea
+                      className="s-textarea"
+                      rows={2}
+                      spellCheck={false}
+                      value={settings.personaNotes}
+                      onChange={(e) => onChange({ personaNotes: e.target.value })}
+                    />
+                  </div>
+                  <button
+                    className="btn"
+                    onClick={() =>
+                      onChange({
+                        persona: buildJobPersona({
+                          userName: settings.userName,
+                          userRole: settings.userRole,
+                          personaNotes: settings.personaNotes,
+                        }),
+                      })
+                    }
+                  >
+                    Regenerate system prompt from profile
+                  </button>
+                </div>
+                <div className="s-section">
                   <span className="s-section-lbl">Voice</span>
                   <div className="s-field">
                     <div className="s-field-label">System prompt</div>
@@ -424,16 +478,6 @@ export function SettingsPanel({
                       onChange={(e) => onChange({ persona: e.target.value })}
                     />
                   </div>
-                  <div className="s-row">
-                    <div>
-                      <div className="s-row-label">Auto-humanize</div>
-                      <div className="s-row-desc">Run the humanizer skill after every draft</div>
-                    </div>
-                    <Toggle checked={settings.humanize} onChange={(v) => onChange({ humanize: v })} />
-                  </div>
-                  {!skills.humanizer && (
-                    <div className="notice small">humanizer skill not found in ~/.claude/skills or the vault.</div>
-                  )}
                 </div>
               </div>
             )}
@@ -586,13 +630,10 @@ export function SettingsPanel({
                       <option value="playwright">Chromium (JavaScript-heavy pages)</option>
                     </select>
                   </div>
-                  <div className="s-row">
-                    <div>
-                      <div className="s-row-label">Enable local web research</div>
-                      <div className="s-row-desc">Lets every agent request bounded searches and page reads through your SearXNG instance.</div>
-                    </div>
-                    <Toggle checked={settings.webResearchEnabled} onChange={(v) => onChange({ webResearchEnabled: v })} />
-                  </div>
+                  <p className="notice small">
+                    Turn web research on or off under <strong>Settings → Skills</strong> (the “Web-search research”
+                    pre-packaged skill). Configure its SearXNG endpoint below.
+                  </p>
                   <div className="s-field">
                     <div className="s-field-label">Local SearXNG URL</div>
                     <div className="s-field-desc">Must point to a loopback SearXNG server with JSON output enabled. No paid search API is used.</div>
@@ -613,8 +654,33 @@ export function SettingsPanel({
             {page === "skills" && (
               <div className="s-page">
                 <div className="s-section">
+                  <span className="s-section-lbl">Pre-packaged skills</span>
+                  <p className="notice small">
+                    Built-in capabilities that ship with the app. Toggle them here; they apply to every tab.
+                  </p>
+                  {PREPACKAGED_SKILLS.map((skill) => (
+                    <div key={skill.id}>
+                      <div className="s-row">
+                        <div>
+                          <div className="s-row-label">{skill.name}</div>
+                          <div className="s-row-desc">{skill.description}</div>
+                        </div>
+                        <Toggle
+                          checked={Boolean(settings[skill.settingKey])}
+                          onChange={(v) => onChange({ [skill.settingKey]: v } as Partial<Settings>)}
+                        />
+                      </div>
+                      {skill.note && <div className="notice small">{skill.note}</div>}
+                      {skill.id === "humanize" && !skills.humanizer && (
+                        <div className="notice small">humanizer skill not found in ~/.claude/skills or the vault.</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="s-section">
                   <div className="skills-installed-hd">
-                    <span className="s-section-lbl" style={{ marginBottom: 0 }}>Installed</span>
+                    <span className="s-section-lbl" style={{ marginBottom: 0 }}>User skills</span>
                     <div className="skills-installed-controls">
                       <input
                         className="skill-filter-input"

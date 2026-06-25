@@ -18,6 +18,7 @@ import {
   type EngineReasoning,
   type TabMode,
 } from "../shared/settings";
+import { buildJobPersona, buildAskPersona } from "../shared/persona";
 
 export const DEFAULT_VAULT = process.env.VAULT_DIR || "/home/jj/repos/obsidian-vault";
 
@@ -45,32 +46,19 @@ const REASONING: Record<Effort, number> = {
 
 export type ServerSettings = CoreSettings;
 
-const DEFAULT_PERSONA = `You are writing a job-application answer on behalf of JJ McCauley, a software engineer. You are not a generic assistant: you produce the exact answer text JJ would submit, written in the first person ("I").
+// The default job persona is generated from an empty profile, so a fresh install
+// gets a neutral, reusable prompt. Onboarding (and the Settings profile fields)
+// regenerate it with the user's name/role/voice. The ask-mode persona is derived
+// per request from the saved profile via resolveAskPersona() below.
 
-GROUNDING
-- The working directory is JJ's personal knowledge vault. Before answering, read whatever you need to ground the answer in real facts:
-  - JJ-master/Background/, JJ-master/Goals/, JJ-master/Leadership-Examples/, JJ-master/Personal-Skills/, JJ-master/Projects/, JJ-master/QnA/, JJ-master/Resumes/
-  - Root example answers that show the target voice: acuitymd.txt, acuitymd_frontend_backend.txt, acuitymd_systems_design.txt, personsAI.txt
-- Never invent accomplishments, employers, metrics, projects, or technologies. If the vault does not support a claim, leave it out. (Same rule JJ uses when generating resumes.)
-- Match the concrete, specific, lightly conversational first-person voice of the example answers.
-
-OUTPUT
-- Output ONLY the answer itself. No "Answer:" label, no headings, no preamble, no meta commentary, no "I hope this helps", and no notes about which files you read.
-- Tailor the answer to the provided job description and to the specific question asked.
-- Use the length a thoughtful applicant would actually write, unless the question implies a specific length.`;
-
-// Ask mode: a general assistant answering questions grounded in JJ's vault. No
-// job-application framing, no first-person impersonation — just accurate answers.
-export const ASK_PERSONA = `You are a helpful assistant answering questions grounded in JJ McCauley's personal Obsidian knowledge vault. The working directory is that vault.
-
-GROUNDING
-- Read whatever files you need to answer accurately (Background, Goals, Projects, Leadership-Examples, Personal-Skills, QnA, Resumes, and the root example answers).
-- Base every claim on what the vault actually says. Never invent facts, projects, metrics, or dates. If the vault does not cover something, say so plainly instead of guessing.
-
-OUTPUT
-- Answer the question directly and concisely in a natural, clear voice.
-- Output ONLY the answer: no preamble, no "I hope this helps", no meta commentary, and no notes about which files you read.
-- Use whatever length and structure (prose, short lists) best fits the question.`;
+/* Builds the ask-mode persona from the configured profile (name/role/voice). */
+export function resolveAskPersona(settings: Pick<CoreSettings, "userName" | "userRole" | "personaNotes">): string {
+  return buildAskPersona({
+    userName: settings.userName,
+    userRole: settings.userRole,
+    personaNotes: settings.personaNotes,
+  });
+}
 
 /* Creates the complete, safe configuration used when no config file exists. */
 export function defaultSettings(vaultDir = DEFAULT_VAULT): ServerSettings {
@@ -84,7 +72,11 @@ export function defaultSettings(vaultDir = DEFAULT_VAULT): ServerSettings {
     humanize: true,
     rag: false,
     maxTurns: 24,
-    persona: DEFAULT_PERSONA,
+    persona: buildJobPersona(),
+    userName: "",
+    userRole: "",
+    personaNotes: "",
+    onboarded: false,
     vaultDir,
     extraDirs: [],
     urlFetchMethod: "auto",
@@ -103,6 +95,10 @@ export function normalizeServerSettings(saved: Partial<ServerSettings> = {}, vau
     ...base,
     ...saved,
     ...engineSettings,
+    userName: typeof raw.userName === "string" ? raw.userName : base.userName,
+    userRole: typeof raw.userRole === "string" ? raw.userRole : base.userRole,
+    personaNotes: typeof raw.personaNotes === "string" ? raw.personaNotes : base.personaNotes,
+    onboarded: raw.onboarded === true,
     vaultDir: raw.vaultDir || vaultDir,
     extraDirs: Array.isArray(raw.extraDirs) ? raw.extraDirs : [],
     urlFetchMethod: toUrlFetchMethod(raw.urlFetchMethod),
@@ -170,8 +166,8 @@ interface BuildArgs {
 }
 
 // Compose the system-prompt append from the base persona plus phase/mode notes.
-// Ask mode is a single grounded answer turn: it skips the humanize note (that
-// belongs to the job-application pipeline). Selected skills apply to every mode.
+// The humanize pass (when enabled) and selected skills apply to every mode; the
+// REVISION note is worded per mode so the ask voice stays neutral.
 /* Builds the mode- and phase-specific system-prompt suffix for a model turn. */
 export function buildAppend({ persona, mode, skills, useRag, phase }: BuildArgs): string {
   const isAsk = mode === "ask";
@@ -186,7 +182,7 @@ export function buildAppend({ persona, mode, skills, useRag, phase }: BuildArgs)
   const skillsNote = buildSkillsNote(skills);
   if (skillsNote) parts.push(skillsNote);
 
-  if (!isAsk && phase === "humanize") {
+  if (phase === "humanize") {
     parts.push(
       `HUMANIZE PASS\n- Use the humanizer skill on your previous answer. Return ONLY the final humanized version of the answer text: no drafts, no audit notes, no commentary, no "still-AI" bullets.`
     );
@@ -237,7 +233,7 @@ Question to answer:
 ${question.trim()}
 """
 
-Write JJ's answer to the question above, grounded in the vault.`;
+Write the answer to the question above in the first person, grounded in the vault.`;
 }
 
 // RAG draft prompt (Claude engine): the retrieved excerpts are the only facts
@@ -378,7 +374,7 @@ ${content.trim().slice(0, 2000)}
 
 Based on the vault structure and content topic, suggest the single best file path (relative to the vault root) where this content should be saved. The path should use an existing directory if one fits, or suggest a new subdirectory under an appropriate parent. Use .md extension.
 
-Respond with ONLY the file path, nothing else. Example: JJ-master/Projects/new-project.md
+Respond with ONLY the file path, nothing else. Example: Projects/new-project.md
 
 ${NO_TOOLS}`;
 }
@@ -393,7 +389,7 @@ ${contextBlock(vaultContext)}
 Analyze the vault content above and identify up to 5 specific pieces of missing information, incomplete sections, or topics that would benefit from being documented. For each gap, write a clear, specific question that the user can answer to fill it in.
 
 Respond with a JSON array of objects, each with "question" (the question to ask) and "targetPath" (suggested vault file path for the answer). Example:
-[{"question": "What technologies did you use in the XYZ project?", "targetPath": "JJ-master/Projects/xyz.md"}]
+[{"question": "What technologies did you use in the XYZ project?", "targetPath": "Projects/xyz.md"}]
 
 Output ONLY the JSON array, no commentary or markdown fencing.
 
@@ -497,6 +493,12 @@ const CONFIG_PATH = join(import.meta.dir, "..", "config.json");
 export async function loadConfig(): Promise<ServerSettings> {
   try {
     const saved = JSON.parse(await Bun.file(CONFIG_PATH).text());
+    // Legacy migration: a config.json written before onboarding existed has no
+    // `onboarded` flag. Its owner is already set up, so don't show them the
+    // first-run modal — only a missing config.json (fresh install) is unonboarded.
+    if (saved && typeof saved === "object" && saved.onboarded === undefined) {
+      saved.onboarded = true;
+    }
     return normalizeServerSettings(saved);
   } catch {
     return defaultSettings();

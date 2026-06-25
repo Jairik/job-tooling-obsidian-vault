@@ -32,6 +32,12 @@ export interface CoreSettings {
   rag: boolean;
   maxTurns: number;
   persona: string;
+  // Profile used to generate the personas above. Collected during first-run
+  // onboarding and editable in Settings; `onboarded` gates the setup modal.
+  userName: string;
+  userRole: string;
+  personaNotes: string;
+  onboarded: boolean;
   vaultDir: string;
   extraDirs: string[];
   urlFetchMethod: UrlFetchMethod;
