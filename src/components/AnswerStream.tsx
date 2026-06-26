@@ -1,8 +1,9 @@
 // Renders a tab's answer: a phase status pill, the live streaming text (which
 // becomes an editable textarea once the run finishes), copy / regenerate / clean-up
 // actions, and — in job mode — a collapsible view of the original pre-humanize draft.
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Phase, TabMode } from "../lib/store";
+import { Markdown } from "./Markdown";
 
 const PHASE_LABEL: Record<Phase, string> = {
   idle: "",
@@ -30,16 +31,35 @@ interface Props {
 export function AnswerStream({ phase, mode, draft, answer, notice, error, onEditAnswer, onCleanup, onRegenerate }: Props) {
   const [showDraft, setShowDraft] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [editing, setEditing] = useState(false);
+  // Points at the rendered-markdown container; its `innerText` is the visible
+  // text with markers stripped, used for both copy and entering edit mode.
+  const previewRef = useRef<HTMLDivElement>(null);
   const running = phase === "draft" || phase === "humanize" || phase === "cleanup" || phase === "followup";
+  // Leave the editor whenever a new run starts so the regenerated answer renders
+  // formatted (and isn't shown as raw markdown in the textarea).
+  useEffect(() => {
+    if (running) setEditing(false);
+  }, [running]);
   // While drafting (before humanize), show the draft text live in the main panel.
   const display = phase === "draft" ? draft : answer || draft;
   const hasContent = Boolean(answer || draft);
 
-  /* Copies the final answer and briefly confirms the action in the button label. */
+  /* The visible, markdown-stripped text — what the user actually sees. */
+  const plainText = () => previewRef.current?.innerText ?? (answer || draft);
+
+  /* Copies the answer as plain characters (no markdown syntax). */
   const copy = async () => {
-    await navigator.clipboard.writeText(answer || draft);
+    await navigator.clipboard.writeText(editing ? answer : plainText());
     setCopied(true);
     setTimeout(() => setCopied(false), 1200);
+  };
+
+  /* Switches to the editor, first flattening the answer to plain text so no
+     markdown markers survive into (or persist after) editing. */
+  const enterEdit = () => {
+    onEditAnswer(plainText());
+    setEditing(true);
   };
 
   // Map the current phase onto the status-pill tone (hidden while idle).
@@ -78,6 +98,25 @@ export function AnswerStream({ phase, mode, draft, answer, notice, error, onEdit
             <path d="M19 14l.7 1.9 1.8.6-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.6z" />
           </svg>
         </button>
+        {hasContent && !running && (
+          <button
+            className={`ans-action-btn ${editing ? "active" : ""}`}
+            title={editing ? "Done editing" : "Edit as plain text"}
+            aria-label={editing ? "Done editing" : "Edit"}
+            onClick={() => (editing ? setEditing(false) : enterEdit())}
+          >
+            {editing ? (
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M20 6L9 17l-5-5" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M12 20h9" />
+                <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" />
+              </svg>
+            )}
+          </button>
+        )}
         {hasContent && (
           <button className={`copy-btn ${copied ? "copied" : ""}`} onClick={copy}>
             <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -96,7 +135,7 @@ export function AnswerStream({ phase, mode, draft, answer, notice, error, onEdit
         {running ? (
           display ? (
             <div className="answer-text">
-              {display}
+              <Markdown ref={previewRef}>{display}</Markdown>
               <span className="caret" />
             </div>
           ) : (
@@ -107,13 +146,20 @@ export function AnswerStream({ phase, mode, draft, answer, notice, error, onEdit
             )
           )
         ) : hasContent ? (
-          <textarea
-            className="answer-edit-area"
-            value={answer}
-            spellCheck
-            placeholder="The grounded answer will appear here."
-            onChange={(e) => onEditAnswer(e.target.value)}
-          />
+          editing ? (
+            <textarea
+              className="answer-edit-area"
+              value={answer}
+              spellCheck
+              autoFocus
+              placeholder="The grounded answer will appear here."
+              onChange={(e) => onEditAnswer(e.target.value)}
+            />
+          ) : (
+            <div className="answer-text">
+              <Markdown ref={previewRef}>{answer}</Markdown>
+            </div>
+          )
         ) : (
           !error && (
             <div className="answer-placeholder">
@@ -132,7 +178,7 @@ export function AnswerStream({ phase, mode, draft, answer, notice, error, onEdit
             <button className="draft-toggle" onClick={() => setShowDraft((s) => !s)}>
               {showDraft ? "▾" : "▸"} Original draft (pre-humanize)
             </button>
-            {showDraft && <div className="draft-text">{draft}</div>}
+            {showDraft && <Markdown className="draft-text">{draft}</Markdown>}
           </div>
         )}
       </div>
