@@ -21,6 +21,7 @@ import {
   buildFillinScanPrompt,
   buildFillinAnswerPrompt,
   buildWriteCleanupPrompt,
+  buildWriterAppend,
   defaultSettings,
   normalizeServerSettings,
 } from "./config";
@@ -28,6 +29,7 @@ import { loadSelectedSkills } from "./skills";
 import { buildWebResearchSkill, parseWebToolRequest, resolveWebPage, webResearchEnabled } from "./web";
 import { fetchUsageForTarget, parseCodexProfileStats, parseCodexUsagePayload, parseOpenCodeStats } from "./usage";
 import { effectiveEngineModel, effectiveEngineReasoning } from "../shared/settings";
+import { buildAskPersona, buildDefaultSystemPrompt, buildJobPersona } from "../shared/persona";
 import { defaultEngineModels, defaultEngineReasoning } from "../shared/settings";
 import { isClaudeUsageModel, usageSupportForTarget } from "../shared/usage";
 import { normalizeSettings as normalizeClientSettings } from "../src/lib/store";
@@ -131,23 +133,23 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
     expect(follow).toContain("my tweak");
     expect(follow).toContain("Do not use any tools");
 
-    const summarize = buildSummarizePrompt("text to sum", "vault-ctx");
+    const summarize = buildSummarizePrompt("text to sum", "personal-ctx");
     expect(summarize).toContain("text to sum");
-    expect(summarize).toContain("vault-ctx");
+    expect(summarize).toContain("personal-ctx");
     expect(summarize).toContain("Do not use any tools");
 
-    const place = buildAutoPlacePrompt("my new code", "vault/dir/structure");
+    const place = buildAutoPlacePrompt("my new code", "notes/dir/structure");
     expect(place).toContain("my new code");
-    expect(place).toContain("vault/dir/structure");
+    expect(place).toContain("notes/dir/structure");
     expect(place).toContain("Do not use any tools");
 
-    const scan = buildFillinScanPrompt("vault-ctx", "focus area");
+    const scan = buildFillinScanPrompt("personal-ctx", "focus area");
     expect(scan).toContain("focus area");
-    expect(scan).toContain("vault-ctx");
+    expect(scan).toContain("personal-ctx");
     expect(scan).toContain("Do not use any tools");
 
-    const ans = buildFillinAnswerPrompt("vault-ctx", "the q", "the ans", "path.md");
-    expect(ans).toContain("vault-ctx");
+    const ans = buildFillinAnswerPrompt("personal-ctx", "the q", "the ans", "path.md");
+    expect(ans).toContain("personal-ctx");
     expect(ans).toContain("the q");
     expect(ans).toContain("the ans");
     expect(ans).toContain("path.md");
@@ -175,6 +177,60 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
     // Old browser settings used "basic" before the local resolver existed.
     // Normalization upgrades them to the safe Readability-first auto mode.
     expect(normalizeServerSettings({ urlFetchMethod: "basic" as any }).urlFetchMethod).toBe("auto");
+  });
+
+  test("askPersona is a stored, per-mode system prompt independent of the job persona", () => {
+    // Migration: a config written before askPersona existed has no such key, so it
+    // is seeded from the profile — preserving the exact Ask prompt that used to be
+    // recomputed on every request. The job persona stays untouched.
+    const migrated = normalizeServerSettings({
+      userName: "Jane Doe",
+      userRole: "a data scientist",
+      personaNotes: "I write tersely.",
+      persona: "JOB ONLY PROMPT",
+      // no askPersona key
+    } as any);
+    expect(migrated.askPersona).toBe(
+      buildAskPersona({ userName: "Jane Doe", userRole: "a data scientist", personaNotes: "I write tersely." })
+    );
+    expect(migrated.askPersona).toContain("Jane Doe");
+    expect(migrated.askPersona.length).toBeGreaterThan(0);
+    // The two prompts are independent: the job persona never leaks into Ask mode.
+    expect(migrated.persona).toBe("JOB ONLY PROMPT");
+    expect(migrated.askPersona).not.toBe(migrated.persona);
+
+    // An explicitly saved Ask prompt is preserved verbatim (not regenerated).
+    expect(normalizeServerSettings({ askPersona: "MY CUSTOM ASK PROMPT" } as any).askPersona).toBe(
+      "MY CUSTOM ASK PROMPT"
+    );
+  });
+
+  test("default system prompt rules apply across all user-facing modes", () => {
+    const profile = {
+      userName: "Jane Doe",
+      userRole: "a systems engineer",
+      personaNotes: "Keep the tone direct.",
+    };
+    const defaultPrompt = buildDefaultSystemPrompt(profile);
+    const jobPrompt = buildJobPersona(profile);
+    const askPrompt = buildAskPersona(profile);
+    const settings = { ...defaultSettings(), ...profile };
+    const writerAppend = buildWriterAppend(settings, "Summarize content for personal notes.");
+    const cliHumanize = buildCliHumanizePrompt("Rova helped me learn systems design.", askPrompt);
+    const cliCleanup = buildCliCleanupPrompt("Parallel Query Processing System was useful.", defaultPrompt);
+
+    for (const prompt of [defaultPrompt, jobPrompt, askPrompt, writerAppend, cliHumanize, cliCleanup]) {
+      expect(prompt).toContain("include a brief explanatory clause or one-sentence description");
+      expect(prompt).toContain("Do not leave bare names unexplained");
+      expect(prompt).not.toMatch(/\bvault\b/i);
+      expect(prompt).toContain("personally explaining work, experience, and interests");
+    }
+
+    expect(jobPrompt).toContain("JOB-APPLICATION MODE");
+    expect(askPrompt).toContain("ASK MODE");
+    expect(writerAppend).toContain("WRITER MODE");
+    expect(cliHumanize).toContain("ASK MODE");
+    expect(cliCleanup).toContain("CORE RESPONSE RULES");
   });
 
   test("uses a portable, bounded web research protocol for every agent", async () => {
@@ -459,8 +515,8 @@ Output tokens: 2,345
     const { newTab, cloneTabForNewQuestion, overrideSettingsBody } = await import("../src/lib/store");
     const { defaultSettings } = await import("./config");
 
-    // The persona the user has *currently specified* in Settings.
-    const current: any = { ...defaultSettings(), persona: "CURRENT SYSTEM PROMPT" };
+    // The personas the user has *currently specified* in Settings.
+    const current: any = { ...defaultSettings(), persona: "CURRENT SYSTEM PROMPT", askPersona: "CURRENT ASK PROMPT" };
 
     // A job tab whose Override was toggled on back when an older persona was in
     // effect, freezing that stale persona into the override snapshot.
@@ -469,7 +525,7 @@ Output tokens: 2,345
       jobDescription: "A specific job description",
       skills: ["yc-combinator"],
       overrideEnabled: true,
-      override: { ...defaultSettings(), persona: "STALE SYSTEM PROMPT" },
+      override: { ...defaultSettings(), persona: "STALE SYSTEM PROMPT", askPersona: "STALE ASK PROMPT" },
     };
 
     // "+ New question" clones the tab's context into a fresh conversation.
@@ -479,11 +535,14 @@ Output tokens: 2,345
     expect(clone.skills).toContain("yc-combinator");
     expect(clone.id).not.toBe(source.id);
 
-    // The settings sent for that clone must carry the CURRENT persona, not the
+    // The settings sent for that clone must carry the CURRENT personas, not the
     // stale snapshot — otherwise the new question ignores the specified system prompt.
+    // Both modes' prompts (Job persona + Ask askPersona) are pinned to global.
     const body = overrideSettingsBody(clone, current);
     expect(body?.persona).toBe("CURRENT SYSTEM PROMPT");
     expect(body?.persona).not.toBe("STALE SYSTEM PROMPT");
+    expect(body?.askPersona).toBe("CURRENT ASK PROMPT");
+    expect(body?.askPersona).not.toBe("STALE ASK PROMPT");
 
     // With no override, the tab falls back to the global (current) settings entirely.
     expect(overrideSettingsBody({ ...clone, overrideEnabled: false }, current)).toBeUndefined();

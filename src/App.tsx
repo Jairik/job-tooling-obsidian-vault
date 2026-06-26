@@ -297,10 +297,8 @@ export function App() {
   };
 
   // Close every tab and reset to a single fresh one. Aborts any in-flight runs
-  // (locally and server-side) first. Confirms when more than one tab is open,
-  // since the open conversations are discarded.
+  // (locally and server-side) first.
   const clearAllTabs = () => {
-    if (tabs.length > 1 && !window.confirm(`Close all ${tabs.length} tabs and start fresh?`)) return;
     for (const t of tabs) {
       controllers.current.get(t.id)?.abort();
       api.cancel(t.id).catch(() => {});

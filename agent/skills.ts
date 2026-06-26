@@ -41,7 +41,7 @@ export async function detectSkills(vaultDir: string): Promise<SkillStatus> {
 
 export type SkillScope = "user" | "vault";
 
-export interface SkillInfo {
+interface DiscoveredSkill {
   name: string;
   description: string;
   scope: SkillScope;
@@ -111,9 +111,9 @@ function parseFrontmatter(md: string, fallbackName: string): { name: string; des
 }
 
 /* Reads each direct skill folder in one scope and returns its parsed metadata. */
-function scanScope(scope: SkillScope, vaultDir: string): SkillInfo[] {
+function scanScope(scope: SkillScope, vaultDir: string): DiscoveredSkill[] {
   const root = skillsRoot(scope, vaultDir);
-  const found: SkillInfo[] = [];
+  const found: DiscoveredSkill[] = [];
   let names: string[];
   try {
     names = readdirSync(root, { withFileTypes: true })
@@ -139,9 +139,9 @@ function scanScope(scope: SkillScope, vaultDir: string): SkillInfo[] {
 // List every installed skill across user + vault scope. User scope is scanned
 // first, so a global skill wins when both scopes contain the same display name.
 /* Lists both scopes while exposing at most one selectable skill per name. */
-export async function listSkills(vaultDir: string): Promise<SkillInfo[]> {
+export async function listSkills(vaultDir: string): Promise<DiscoveredSkill[]> {
   const all = [...scanScope("user", vaultDir), ...scanScope("vault", vaultDir)];
-  const byName = new Map<string, SkillInfo>();
+  const byName = new Map<string, DiscoveredSkill>();
   for (const s of all) {
     if (!byName.has(s.name)) byName.set(s.name, s);
   }

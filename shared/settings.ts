@@ -31,8 +31,14 @@ export interface CoreSettings {
   humanize: boolean;
   rag: boolean;
   maxTurns: number;
+  // Editable system prompts, one per answer mode. `persona` governs Job mode
+  // (first-person application drafts); `askPersona` governs Ask mode (general
+  // personal-context Q&A). Both are seeded from the profile fields below but, once
+  // saved, are authoritative. Write mode uses fixed workflow prompts plus the same
+  // shared default rules seeded from the profile fields.
   persona: string;
-  // Profile used to generate the personas above. Collected during first-run
+  askPersona: string;
+  // Profile used to seed the personas above. Collected during first-run
   // onboarding and editable in Settings; `onboarded` gates the setup modal.
   userName: string;
   userRole: string;

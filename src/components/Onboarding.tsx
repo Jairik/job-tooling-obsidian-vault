@@ -4,7 +4,7 @@
 // saved patch persists to config.json so it survives updates.
 import { useEffect, useRef, useState } from "react";
 import type { Settings } from "../lib/store";
-import { buildJobPersona } from "../../shared/persona";
+import { buildJobPersona, buildAskPersona } from "../../shared/persona";
 import { api } from "../lib/api";
 
 interface VaultState {
@@ -25,14 +25,20 @@ export function Onboarding({ initial, onComplete, onSkip }: OnboardingProps) {
   const [role, setRole] = useState(initial.userRole ?? "");
   const [notes, setNotes] = useState(initial.personaNotes ?? "");
   const [vaultDir, setVaultDir] = useState(initial.vaultDir ?? "");
-  const [persona, setPersona] = useState(() =>
-    buildJobPersona({ userName: initial.userName, userRole: initial.userRole, personaNotes: initial.personaNotes })
-  );
-  // Once the user hand-edits the prompt, stop regenerating it from the fields.
+  const profile = { userName: initial.userName, userRole: initial.userRole, personaNotes: initial.personaNotes };
+  const [askPersona, setAskPersona] = useState(() => buildAskPersona(profile));
+  const [persona, setPersona] = useState(() => buildJobPersona(profile));
+  // Once the user hand-edits a prompt, stop regenerating it from the fields.
+  const [askPersonaEdited, setAskPersonaEdited] = useState(false);
   const [personaEdited, setPersonaEdited] = useState(false);
   const [vault, setVault] = useState<VaultState | null>(null);
 
-  // Keep the preview in sync with the profile fields until the user edits it.
+  // Keep each preview in sync with the profile fields until the user edits it.
+  useEffect(() => {
+    if (askPersonaEdited) return;
+    setAskPersona(buildAskPersona({ userName: name, userRole: role, personaNotes: notes }));
+  }, [name, role, notes, askPersonaEdited]);
+
   useEffect(() => {
     if (personaEdited) return;
     setPersona(buildJobPersona({ userName: name, userRole: role, personaNotes: notes }));
@@ -62,6 +68,7 @@ export function Onboarding({ initial, onComplete, onSkip }: OnboardingProps) {
       personaNotes: notes.trim(),
       vaultDir: vaultDir.trim() || initial.vaultDir,
       persona,
+      askPersona,
       onboarded: true,
     });
   };
@@ -158,11 +165,32 @@ export function Onboarding({ initial, onComplete, onSkip }: OnboardingProps) {
           </div>
 
           <div className="s-field">
-            <div className="s-field-label">System prompt</div>
-            <div className="s-field-desc">Generated from the above and injected into every generation. Edit freely.</div>
+            <div className="s-field-label">Ask system prompt</div>
+            <div className="s-field-desc">
+              Governs Ask mode (general questions answered from your vault) — the mode new tabs open in.
+              Built from the fields above; edit freely.
+            </div>
             <textarea
               className="s-textarea"
-              rows={9}
+              rows={7}
+              spellCheck={false}
+              value={askPersona}
+              onChange={(e) => {
+                setAskPersona(e.target.value);
+                setAskPersonaEdited(true);
+              }}
+            />
+          </div>
+
+          <div className="s-field">
+            <div className="s-field-label">Drafting system prompt</div>
+            <div className="s-field-desc">
+              Governs Job mode (first-person application drafts written in your voice).
+              Built from the fields above; edit freely.
+            </div>
+            <textarea
+              className="s-textarea"
+              rows={7}
               spellCheck={false}
               value={persona}
               onChange={(e) => {

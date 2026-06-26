@@ -9,6 +9,7 @@ import {
   type TabMode,
   type UrlFetchMethod,
 } from "../../shared/settings";
+import { buildAskPersona } from "../../shared/persona";
 import type { FunVariant } from "../../shared/design";
 
 export type { Engine, TabMode, UrlFetchMethod } from "../../shared/settings";
@@ -97,6 +98,13 @@ export function normalizeSettings(raw: Partial<Settings>): Settings {
     rag: raw.rag ?? false,
     maxTurns: raw.maxTurns ?? 24,
     persona: raw.persona ?? "",
+    // Mirror the server migration: when a cached settings blob predates
+    // askPersona, seed it from the profile so the Ask prompt is never blank.
+    // A present value (including "") is the user's choice and is kept verbatim.
+    askPersona:
+      typeof raw.askPersona === "string"
+        ? raw.askPersona
+        : buildAskPersona({ userName: raw.userName, userRole: raw.userRole, personaNotes: raw.personaNotes }),
     userName: raw.userName ?? "",
     userRole: raw.userRole ?? "",
     personaNotes: raw.personaNotes ?? "",
@@ -307,16 +315,16 @@ export function cloneTabForNewQuestion(source: Tab, existing: Tab[]): Tab {
 }
 
 // The per-tab settings override to send to the server, or undefined when the tab
-// uses the global settings. The persona (system prompt) and humanize are ALWAYS
-// taken from the current global settings: the override UI only edits
-// engine/model/effort/vault, never the system prompt, and humanize is now a
-// pre-packaged skill toggled solely in Settings → Skills. So a tab — or one cloned
-// via "+ New question" — follows the current global values rather than snapshots
-// that were frozen when Override was first toggled on (and have since gone stale).
+// uses the global settings. Both system prompts (persona for Job mode, askPersona
+// for Ask mode) and humanize are ALWAYS taken from the current global settings:
+// the override UI only edits engine/model/effort/vault, never the system prompts,
+// and humanize is now a pre-packaged skill toggled solely in Settings → Skills. So
+// a tab — or one cloned via "+ New question" — follows the current global values
+// rather than snapshots frozen when Override was first toggled on (now stale).
 /* Returns an override payload only when the tab intentionally differs from global settings. */
 export function overrideSettingsBody(tab: Tab, global: Settings): Settings | undefined {
   if (!tab.overrideEnabled || !tab.override) return undefined;
-  return { ...tab.override, persona: global.persona, humanize: global.humanize };
+  return { ...tab.override, persona: global.persona, askPersona: global.askPersona, humanize: global.humanize };
 }
 
 /* Restores tabs from localStorage and repairs data written by earlier app versions. */

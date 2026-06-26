@@ -18,7 +18,7 @@ import {
   type EngineReasoning,
   type TabMode,
 } from "../shared/settings";
-import { buildJobPersona, buildAskPersona } from "../shared/persona";
+import { buildDefaultSystemPrompt, buildJobPersona, buildAskPersona } from "../shared/persona";
 
 export const DEFAULT_VAULT = process.env.VAULT_DIR || "/home/jj/repos/obsidian-vault";
 
@@ -46,14 +46,24 @@ const REASONING: Record<Effort, number> = {
 
 export type ServerSettings = CoreSettings;
 
-// The default job persona is generated from an empty profile, so a fresh install
-// gets a neutral, reusable prompt. Onboarding (and the Settings profile fields)
-// regenerate it with the user's name/role/voice. The ask-mode persona is derived
-// per request from the saved profile via resolveAskPersona() below.
+// Both default personas are generated from an empty profile, so a fresh install
+// gets neutral, reusable prompts. Onboarding (and the Settings profile fields)
+// regenerate them with the user's name/role/voice. Once saved, each persona is
+// stored verbatim in config.json and injected as-is — see resolveAskPersona(),
+// which is now used only to seed/migrate the default Ask prompt from the profile.
 
-/* Builds the ask-mode persona from the configured profile (name/role/voice). */
-export function resolveAskPersona(settings: Pick<CoreSettings, "userName" | "userRole" | "personaNotes">): string {
+/* Builds the default ask-mode persona from the configured profile (name/role/voice). */
+function resolveAskPersona(settings: Pick<CoreSettings, "userName" | "userRole" | "personaNotes">): string {
   return buildAskPersona({
+    userName: settings.userName,
+    userRole: settings.userRole,
+    personaNotes: settings.personaNotes,
+  });
+}
+
+/* Builds the common default system rules that apply outside Ask/Job too. */
+export function resolveDefaultSystemPrompt(settings: Pick<CoreSettings, "userName" | "userRole" | "personaNotes">): string {
+  return buildDefaultSystemPrompt({
     userName: settings.userName,
     userRole: settings.userRole,
     personaNotes: settings.personaNotes,
@@ -73,6 +83,7 @@ export function defaultSettings(vaultDir = DEFAULT_VAULT): ServerSettings {
     rag: false,
     maxTurns: 24,
     persona: buildJobPersona(),
+    askPersona: buildAskPersona(),
     userName: "",
     userRole: "",
     personaNotes: "",
@@ -91,7 +102,7 @@ export function normalizeServerSettings(saved: Partial<ServerSettings> = {}, vau
   const raw = saved as Partial<ServerSettings> & { engineModels?: EngineModels; engineReasoning?: EngineReasoning };
   const engineSettings = normalizeEngineSettings(raw);
 
-  return {
+  const normalized: ServerSettings = {
     ...base,
     ...saved,
     ...engineSettings,
@@ -105,6 +116,15 @@ export function normalizeServerSettings(saved: Partial<ServerSettings> = {}, vau
     webResearchEnabled: raw.webResearchEnabled === true,
     searxngUrl: typeof raw.searxngUrl === "string" ? raw.searxngUrl.trim() : base.searxngUrl,
   };
+
+  // Migration: a config.json written before askPersona existed has no such key.
+  // Seed it from the (already normalized) profile so Ask mode keeps the exact
+  // prompt it used to recompute on every request. A present value — even "" —
+  // is the user's own choice and is preserved verbatim.
+  normalized.askPersona =
+    typeof raw.askPersona === "string" ? raw.askPersona : resolveAskPersona(normalized);
+
+  return normalized;
 }
 
 /* Applies one partial settings update, then normalizes the resulting full configuration. */
@@ -175,7 +195,7 @@ export function buildAppend({ persona, mode, skills, useRag, phase }: BuildArgs)
 
   if (useRag) {
     parts.push(
-      `RETRIEVAL MODE\n- Relevant excerpts from the vault have already been retrieved and included in the user message. Treat them as your only source of facts. The Read, Grep, and Glob tools are disabled, so do not try to browse the vault — rely solely on the provided excerpts. If they do not support a claim, leave it out.`
+      `RETRIEVAL MODE\n- Relevant excerpts have already been retrieved and included in the user message. Treat them as your only source of facts. The Read, Grep, and Glob tools are disabled, so do not try to browse files - rely solely on the provided excerpts. If they do not support a claim, leave it out.`
     );
   }
 
@@ -191,7 +211,7 @@ export function buildAppend({ persona, mode, skills, useRag, phase }: BuildArgs)
   if (phase === "followup") {
     parts.push(
       isAsk
-        ? `REVISION\n- You are revising your previous answer based on the user's requested change. Apply it and return the FULL revised answer, staying grounded in the vault. Output only the revised answer.`
+        ? `REVISION\n- You are revising your previous answer based on the user's requested change. Apply it and return the FULL revised answer, staying grounded in the provided context. Output only the revised answer.`
         : `REVISION\n- You are revising the existing answer based on the user's requested tweak. Apply their change and return the FULL revised answer, keeping the same grounded first-person voice and avoiding AI-writing tells. Output only the revised answer.`
     );
   }
@@ -199,21 +219,21 @@ export function buildAppend({ persona, mode, skills, useRag, phase }: BuildArgs)
   return parts.join("\n\n");
 }
 
-// ---- Ask mode prompts (general vault Q&A) ----
-/* Formats a direct question for general vault-grounded answer mode. */
+// ---- Ask mode prompts (general personal-context Q&A) ----
+/* Formats a direct question for general context-grounded answer mode. */
 export function buildAskPrompt(question: string): string {
   return `Question:
 """
 ${question.trim()}
 """
 
-Answer the question above, grounded in the vault.`;
+Answer the question above, grounded in the available personal context.`;
 }
 
 // RAG ask prompt (Claude engine): retrieved excerpts are the only facts available.
 /* Formats an ask prompt whose facts are limited to retrieved excerpts. */
 export function buildRagAskPrompt(context: string, question: string): string {
-  return `${contextBlock(context)}\n\n${buildAskPrompt(question)}\n\nGround your answer ONLY in the vault excerpts above. Do not read or search additional files.`;
+  return `${contextBlock(context)}\n\n${buildAskPrompt(question)}\n\nGround your answer ONLY in the excerpts above. Do not read or search additional files.`;
 }
 
 /* Formats the self-contained ask prompt used by sandboxed external CLIs. */
@@ -233,21 +253,21 @@ Question to answer:
 ${question.trim()}
 """
 
-Write the answer to the question above in the first person, grounded in the vault.`;
+Write the answer to the question above in the first person, grounded in the available personal context.`;
 }
 
 // RAG draft prompt (Claude engine): the retrieved excerpts are the only facts
 // available, so they go straight into the prompt and file-reading is disabled.
 /* Formats a draft prompt whose claims must come only from RAG excerpts. */
 export function buildRagDraftPrompt(context: string, jobDescription: string, question: string): string {
-  return `${contextBlock(context)}\n\n${buildDraftPrompt(jobDescription, question)}\n\nGround your answer ONLY in the vault excerpts above. Do not read or search additional files.`;
+  return `${contextBlock(context)}\n\n${buildDraftPrompt(jobDescription, question)}\n\nGround your answer ONLY in the excerpts above. Do not read or search additional files.`;
 }
 
 // RAG follow-up prompt (Claude engine): refresh the excerpts for the new tweak
 // so revisions stay grounded without re-enabling file browsing.
 /* Formats a revision request while retaining the RAG-only fact boundary. */
 export function buildRagFollowupPrompt(context: string, tweak: string): string {
-  return `${contextBlock(context)}\n\n${tweak.trim()}\n\nApply the change using ONLY the vault excerpts above (plus the answer you already wrote). Do not read or search additional files.`;
+  return `${contextBlock(context)}\n\n${tweak.trim()}\n\nApply the change using ONLY the excerpts above (plus the answer you already wrote). Do not read or search additional files.`;
 }
 
 // ---- Gemini Antigravity (agy) engine ----
@@ -266,11 +286,11 @@ Output ONLY the rewritten answer.`;
 // CLI agents stay sandboxed. When the opt-in LOCAL WEB RESEARCH SKILL is present,
 // its two tagged JSON requests are the sole exception; the mediator executes them
 // rather than giving the model shell, browser, filesystem, or network access.
-const NO_TOOLS = `Do not use any tools directly, do not run any shell commands, and do not read or write any files. Use ONLY the VAULT CONTEXT provided above as your source of facts, unless the separately supplied LOCAL WEB RESEARCH SKILL returns mediated web evidence.`;
+const NO_TOOLS = `Do not use any tools directly, do not run any shell commands, and do not read or write any files. Use ONLY the PERSONAL CONTEXT provided above as your source of facts, unless the separately supplied LOCAL WEB RESEARCH SKILL returns mediated web evidence.`;
 
-/* Wraps retrieved vault text in a clearly delimited prompt section. */
+/* Wraps retrieved personal text in a clearly delimited prompt section. */
 function contextBlock(context: string): string {
-  return `VAULT CONTEXT (read-only — your only source of facts):\n"""\n${context.trim() || "(none provided)"}\n"""`;
+  return `PERSONAL CONTEXT (read-only - your only source of facts):\n"""\n${context.trim() || "(none provided)"}\n"""`;
 }
 
 /* Creates the complete draft instruction for an external CLI without vault access. */
@@ -284,8 +304,9 @@ export function buildCliDraftPrompt(
 }
 
 /* Creates the final-style pass prompt for external CLI engines. */
-export function buildCliHumanizePrompt(draft: string): string {
-  return `${HUMANIZE_INLINE}\n\nAnswer to rewrite:\n"""\n${draft.trim()}\n"""\n\nDo not use any tools or run any commands; just return the rewritten answer.`;
+export function buildCliHumanizePrompt(draft: string, systemPrompt = ""): string {
+  const system = systemPrompt.trim();
+  return `${system ? `${system}\n\n` : ""}${HUMANIZE_INLINE}\n\nAnswer to rewrite:\n"""\n${draft.trim()}\n"""\n\nDo not use any tools or run any commands; just return the rewritten answer.`;
 }
 
 // ---- Clean up (lightweight grammar fix + humanize) ----
@@ -305,16 +326,18 @@ export function buildCleanupPrompt(text: string, useSkill: boolean): string {
 }
 
 /* Builds the companion system instruction for the cleanup phase. */
-export function buildCleanupAppend(useSkill: boolean): string {
-  return useSkill
+export function buildCleanupAppend(systemPrompt: string, useSkill: boolean): string {
+  const cleanup = useSkill
     ? `CLEANUP PASS\n- Fix grammar and writing in the provided text, then use the humanizer skill on it. Return ONLY the final cleaned text: no drafts, no audit notes, no commentary.`
     : `CLEANUP PASS\n- Fix grammar and writing in the provided text and remove signs of AI writing. Return ONLY the final cleaned text: no commentary, no notes.`;
+  return [systemPrompt.trim(), cleanup].filter(Boolean).join("\n\n");
 }
 
 // Gemini engine has no Skill tool, so cleanup always uses the inline rules.
 /* Builds the self-contained cleanup prompt sent to external CLIs. */
-export function buildCliCleanupPrompt(text: string): string {
-  return `${CLEANUP_GRAMMAR}\n${HUMANIZE_INLINE}\n\nText to clean up:\n"""\n${text.trim()}\n"""\n\nDo not use any tools or run any commands; return ONLY the cleaned text.`;
+export function buildCliCleanupPrompt(text: string, systemPrompt = ""): string {
+  const system = systemPrompt.trim();
+  return `${system ? `${system}\n\n` : ""}${CLEANUP_GRAMMAR}\n${HUMANIZE_INLINE}\n\nText to clean up:\n"""\n${text.trim()}\n"""\n\nDo not use any tools or run any commands; return ONLY the cleaned text.`;
 }
 
 /* Includes the existing answer and requested change for a sandboxed CLI revision. */
@@ -340,29 +363,41 @@ Apply the change and return the FULL revised answer, grounded in the context abo
 ${NO_TOOLS}`;
 }
 
-// ---- Vault Writer prompts ----
+// ---- Writer prompts ----
 
-/* Directs the writer workflow to summarize imported text using vault context. */
-export function buildSummarizePrompt(text: string, vaultContext: string): string {
-  return `You are summarizing content for a personal knowledge vault.
+/* Builds the common writer-mode append so every writer action gets default rules. */
+export function buildWriterAppend(
+  settings: Pick<CoreSettings, "userName" | "userRole" | "personaNotes">,
+  taskInstruction: string
+): string {
+  return `${resolveDefaultSystemPrompt(settings)}
 
-${contextBlock(vaultContext)}
+WRITER MODE
+- Use the same source-grounding, project-description, and user-facing phrasing rules as Ask and Job modes.
+- ${taskInstruction.trim()}`;
+}
+
+/* Directs the writer workflow to summarize imported text using personal context. */
+export function buildSummarizePrompt(text: string, personalContext: string): string {
+  return `Summarize imported content for the user's personal notes.
+
+${contextBlock(personalContext)}
 
 Content to summarize:
 """
 ${text.trim()}
 """
 
-Produce a clear, well-structured markdown summary of the content above. Use headings, bullet points, and key takeaways where appropriate. The summary should integrate well with the existing vault context. Output ONLY the markdown summary — no commentary.
+Produce a clear, well-structured markdown summary of the content above. Use headings, bullet points, and key takeaways where appropriate. The summary should fit with the existing personal context. Output ONLY the markdown summary - no commentary.
 
 ${NO_TOOLS}`;
 }
 
 /* Asks the writer workflow to select the most appropriate destination path. */
 export function buildAutoPlacePrompt(content: string, vaultStructure: string): string {
-  return `You are analyzing a personal knowledge vault to determine the best location for new content.
+  return `Determine the best location for new personal-note content.
 
-Vault directory structure:
+Directory structure:
 """
 ${vaultStructure.trim()}
 """
@@ -372,23 +407,23 @@ New content to place:
 ${content.trim().slice(0, 2000)}
 """
 
-Based on the vault structure and content topic, suggest the single best file path (relative to the vault root) where this content should be saved. The path should use an existing directory if one fits, or suggest a new subdirectory under an appropriate parent. Use .md extension.
+Based on the directory structure and content topic, suggest the single best relative file path where this content should be saved. The path should use an existing directory if one fits, or suggest a new subdirectory under an appropriate parent. Use .md extension.
 
 Respond with ONLY the file path, nothing else. Example: Projects/new-project.md
 
 ${NO_TOOLS}`;
 }
 
-/* Finds unanswered prompts in the vault and returns structured questions to fill. */
-export function buildFillinScanPrompt(vaultContext: string, prompt?: string): string {
+/* Finds unanswered prompts in personal context and returns structured questions to fill. */
+export function buildFillinScanPrompt(personalContext: string, prompt?: string): string {
   const focus = prompt ? `\nThe user wants to focus on: ${prompt.trim()}` : '';
-  return `You are analyzing a personal knowledge vault to find gaps and missing information.${focus}
+  return `Find gaps and missing information in the user's personal context.${focus}
 
-${contextBlock(vaultContext)}
+${contextBlock(personalContext)}
 
-Analyze the vault content above and identify up to 5 specific pieces of missing information, incomplete sections, or topics that would benefit from being documented. For each gap, write a clear, specific question that the user can answer to fill it in.
+Analyze the personal context above and identify up to 5 specific pieces of missing information, incomplete sections, or topics that would benefit from being documented. For each gap, write a clear, specific question that the user can answer to fill it in.
 
-Respond with a JSON array of objects, each with "question" (the question to ask) and "targetPath" (suggested vault file path for the answer). Example:
+Respond with a JSON array of objects, each with "question" (the question to ask) and "targetPath" (suggested note file path for the answer). Example:
 [{"question": "What technologies did you use in the XYZ project?", "targetPath": "Projects/xyz.md"}]
 
 Output ONLY the JSON array, no commentary or markdown fencing.
@@ -396,17 +431,17 @@ Output ONLY the JSON array, no commentary or markdown fencing.
 ${NO_TOOLS}`;
 }
 
-/* Prepares an answer that can be inserted into a specific vault file and question. */
-export function buildFillinAnswerPrompt(vaultContext: string, question: string, answer: string, targetPath: string): string {
-  return `You are formatting a user's answer into a well-structured vault entry.
+/* Prepares an answer that can be inserted into a specific note file and question. */
+export function buildFillinAnswerPrompt(personalContext: string, question: string, answer: string, targetPath: string): string {
+  return `Format the user's answer into a well-structured note entry.
 
-${contextBlock(vaultContext)}
+${contextBlock(personalContext)}
 
 Question that was asked: ${question.trim()}
 User's answer: ${answer.trim()}
 Target file: ${targetPath}
 
-Format the user's answer into clean, well-structured markdown that fits naturally into the vault. If the target file already has content in the vault context, format this as an addition/update. Use appropriate headings, bullet points, and formatting.
+Format the user's answer into clean, well-structured markdown that fits naturally with the surrounding personal context. If the target file already has content in the personal context, format this as an addition/update. Use appropriate headings, bullet points, and formatting.
 
 Output ONLY the formatted markdown content — no commentary, no file path, no fencing.
 
@@ -415,7 +450,7 @@ ${NO_TOOLS}`;
 
 /* Applies the writer workflow's formatting and clarity cleanup before saving. */
 export function buildWriteCleanupPrompt(text: string): string {
-  return `Clean up and format the following text into well-structured markdown for a personal knowledge vault.
+  return `Clean up and format the following text into well-structured markdown for personal notes.
 
 Text to clean up:
 """

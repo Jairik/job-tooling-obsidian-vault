@@ -433,7 +433,7 @@ function withTarget(result: UsageResult, target: UsageTarget): UsageResult {
 }
 
 /* Fetches and normalizes Claude subscription usage for the status panel. */
-export async function fetchClaudeUsage(): Promise<UsageResult> {
+async function fetchClaudeUsage(): Promise<UsageResult> {
   const creds = await readCredentials();
   if (!creds) {
     return { ok: false, error: "No Claude Code login found. Sign in with the `claude` CLI first." };
@@ -479,7 +479,7 @@ export async function fetchClaudeUsage(): Promise<UsageResult> {
 }
 
 /* Fetches Codex account usage using the same local ChatGPT auth Codex stores. */
-export async function fetchCodexUsage(): Promise<UsageResult> {
+async function fetchCodexUsage(): Promise<UsageResult> {
   const auth = await readCodexAuth();
   if (!auth) {
     return { ok: false, error: "No Codex ChatGPT login found. Sign in with `codex login` first." };

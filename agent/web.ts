@@ -316,7 +316,7 @@ export async function resolveWebPage(
 }
 
 /* Queries a loopback SearXNG instance using its documented JSON Search API. */
-export async function searchWeb(settings: Pick<CoreSettings, "searxngUrl">, query: string, signal?: AbortSignal): Promise<WebSearchResult[]> {
+async function searchWeb(settings: Pick<CoreSettings, "searxngUrl">, query: string, signal?: AbortSignal): Promise<WebSearchResult[]> {
   const cleaned = query.replace(/\s+/g, " ").trim();
   if (cleaned.length < 2 || cleaned.length > 400) throw new Error("Web search queries must be between 2 and 400 characters.");
   const base = localSearxngBase(settings.searxngUrl);
@@ -352,8 +352,8 @@ export async function searchWeb(settings: Pick<CoreSettings, "searxngUrl">, quer
 /* The portable, text-only contract used by Claude and every CLI engine alike. */
 export function buildWebResearchSkill(): string {
   return `LOCAL WEB RESEARCH SKILL
-- Current web information is available only through the Vault Assistant mediator. Never use a shell, browser, native tool, or direct network request yourself.
-- Use web research only when it materially improves the answer, such as for a current fact, a named source, or a request to research the web. Prefer the vault for vault-specific facts.
+- Current web information is available only through the local mediator. Never use a shell, browser, native tool, or direct network request yourself.
+- Use web research only when it materially improves the answer, such as for a current fact, a named source, or a request to research the web. Prefer the provided personal context for personal facts.
 - To request one operation, output exactly one of the following JSON documents enclosed in the matching tags, with no other text:
   <vault-web-tool>{"tool":"web_search","query":"precise search query"}</vault-web-tool>
   <vault-web-tool>{"tool":"web_read","url":"https://public-page.example/path"}</vault-web-tool>

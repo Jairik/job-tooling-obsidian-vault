@@ -7,7 +7,6 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { join } from "path";
 import {
   claudeReasoningTokens,
-  resolveAskPersona,
   buildAppend,
   buildDraftPrompt,
   buildRagDraftPrompt,
@@ -21,6 +20,7 @@ import {
   buildCliFollowupPrompt,
   buildCliAskPrompt,
   buildCliCleanupPrompt,
+  buildWriterAppend,
   buildSummarizePrompt,
   buildAutoPlacePrompt,
   buildFillinScanPrompt,
@@ -29,6 +29,7 @@ import {
   buildGenerateSkillPrompt,
   buildRewriteSkillPrompt,
   buildSkillsNote,
+  resolveDefaultSystemPrompt,
   type SkillNote,
 } from "./config";
 import { DEFAULT_CLAUDE_MODEL, DEFAULT_CLEANUP_MODEL, effectiveEngineModel, type TabMode } from "../shared/settings";
@@ -245,7 +246,7 @@ async function runWithWebResearch(args: WebResearchLoopArgs): Promise<WebTurnRes
     }
 
     if (count === MAX_WEB_TOOL_CALLS) {
-      prompt = `${skill}\n\nThe web research limit has been reached. Do not request another tool. Answer the original task using only the vault context and the web evidence below.\n\nORIGINAL TASK\n${args.task}\n\n${evidence.join("\n\n")}`;
+      prompt = `${skill}\n\nThe web research limit has been reached. Do not request another tool. Answer the original task using only the provided personal context and the web evidence below.\n\nORIGINAL TASK\n${args.task}\n\n${evidence.join("\n\n")}`;
       last = await args.execute(prompt, true);
       if (last.text) args.emit("text", { phase: args.phase, delta: last.text });
       return last;
@@ -352,7 +353,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
       ragContext = await retrieveForQuery(args.settings, ragQuery, emit);
       if (!ragContext) {
         emit("notice", {
-          message: "RAG found no matching vault excerpts — falling back to full vault reading for this answer.",
+          message: "RAG found no matching personal-context excerpts - falling back to the full context for this answer.",
         });
       }
     }
@@ -372,7 +373,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
       let context = ragContext;
       if (!context) context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
       finalText = await runCliAgentTurn(args.settings.engine, {
-        prompt: buildCliAskPrompt(resolveAskPersona(args.settings), context, args.question),
+        prompt: buildCliAskPrompt(args.settings.askPersona, context, args.question),
         skills: skillNotes,
         phase: "draft",
         emit,
@@ -383,7 +384,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
       const ans = await runClaudeAgentTurn({
         prompt: useRag ? buildRagAskPrompt(ragContext, args.question) : buildAskPrompt(args.question),
         settings: args.settings,
-        append: buildAppend({ persona: resolveAskPersona(args.settings), mode: "ask", skills: skillNotes, useRag, phase: "draft" }),
+        append: buildAppend({ persona: args.settings.askPersona, mode: "ask", skills: skillNotes, useRag, phase: "draft" }),
         allowedTools: askTools,
         phase: "draft",
         emit,
@@ -399,7 +400,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
       emit("phase", { phase: "humanize" });
       if (isCliEngine) {
         const hum = await runCliTurn(args.settings.engine, {
-          prompt: buildCliHumanizePrompt(finalText),
+          prompt: buildCliHumanizePrompt(finalText, args.settings.askPersona),
           skills: skillNotes,
           phase: "humanize",
           emit,
@@ -413,7 +414,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
             "Apply the humanizer skill to your previous answer. Return ONLY the final humanized version of the answer text — no commentary, no drafts, no audit notes.",
           resume: finalSession,
           settings: args.settings,
-          append: buildAppend({ persona: resolveAskPersona(args.settings), mode: "ask", skills: skillNotes, useRag, phase: "humanize" }),
+          append: buildAppend({ persona: args.settings.askPersona, mode: "ask", skills: skillNotes, useRag, phase: "humanize" }),
           allowedTools: askTools,
           phase: "humanize",
           emit,
@@ -457,7 +458,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
     if (args.settings.humanize && draft) {
       emit("phase", { phase: "humanize" });
       const hum = await runCliTurn(args.settings.engine, {
-        prompt: buildCliHumanizePrompt(draft),
+        prompt: buildCliHumanizePrompt(draft, args.settings.persona),
         skills: skillNotes,
         phase: "humanize",
         emit,
@@ -475,7 +476,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
       ragContext = await retrieveForQuery(args.settings, ragQuery, emit);
       if (!ragContext) {
         emit("notice", {
-          message: "RAG found no matching vault excerpts — falling back to full vault reading for this answer.",
+          message: "RAG found no matching personal-context excerpts - falling back to the full context for this answer.",
         });
       }
     }
@@ -539,7 +540,7 @@ export async function followUp(tabId: string, args: FollowUpArgs, emit: Emit): P
 
   // Ask follow-ups keep the general assistant voice; job follow-ups keep the
   // configurable job persona. The resumed session re-receives this each turn.
-  const persona = args.mode === "ask" ? resolveAskPersona(args.settings) : args.settings.persona;
+  const persona = args.mode === "ask" ? args.settings.askPersona : args.settings.persona;
   const isCliEngine = args.settings.engine !== "claude";
   const skillNotes = await resolveSkillNotes(args.settings, args.skills, emit);
 
@@ -614,6 +615,7 @@ export async function cleanup(tabId: string, args: CleanupArgs, emit: Emit): Pro
   const isCliEngine = args.settings.engine !== "claude";
   const skills = await detectSkills(args.settings.vaultDir);
   const skillNotes = await resolveSkillNotes(args.settings, args.skills, emit);
+  const defaultSystemPrompt = resolveDefaultSystemPrompt(args.settings);
   let cleaned = text;
 
   if (isCliEngine) {
@@ -622,7 +624,7 @@ export async function cleanup(tabId: string, args: CleanupArgs, emit: Emit): Pro
       return;
     }
     const out = await runCliTurn(args.settings.engine, {
-      prompt: buildCliCleanupPrompt(text),
+      prompt: buildCliCleanupPrompt(text, defaultSystemPrompt),
       skills: skillNotes,
       phase: "cleanup",
       emit,
@@ -640,7 +642,7 @@ export async function cleanup(tabId: string, args: CleanupArgs, emit: Emit): Pro
       engineReasoning: { ...(args.settings.engineReasoning ?? {}), claude: "low" },
     };
     const note = buildSkillsNote(skillNotes);
-    const baseAppend = buildCleanupAppend(skills.humanizer);
+    const baseAppend = buildCleanupAppend(defaultSystemPrompt, skills.humanizer);
     const r = await runTurn({
       prompt: buildCleanupPrompt(text, skills.humanizer),
       settings: cleanupSettings,
@@ -700,13 +702,15 @@ async function runWriterTurn({
       emit("error", { message: `The \`${settings.engine}\` CLI was not found on PATH.` });
       return undefined;
     }
-    return runCliTurn(settings.engine, { prompt, skills, phase, emit, abort, settings });
+    const cliPrompt = append.trim() ? `${append.trim()}\n\nTASK\n${prompt}` : prompt;
+    return runCliTurn(settings.engine, { prompt: cliPrompt, skills, phase, emit, abort, settings });
   }
 
+  const note = buildSkillsNote(skills);
   const result = await runTurn({
     prompt,
     settings: claudeSettings,
-    append,
+    append: note ? `${append}\n\n${note}` : append,
     allowedTools,
     phase,
     emit,
@@ -729,13 +733,11 @@ export async function summarize(tabId: string, args: SummarizeArgs, emit: Emit):
   const skillNotes = await resolveSkillNotes(args.settings, args.skills, emit);
   let context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
 
-  const note = buildSkillsNote(skillNotes);
-  const baseAppend = "You are summarizing content for a personal knowledge vault. Produce clean, well-structured markdown.";
   const finalText = await runWriterTurn({
     settings: args.settings,
     prompt: buildSummarizePrompt(sourceText, context),
     skills: skillNotes,
-    append: note ? `${baseAppend}\n\n${note}` : baseAppend,
+    append: buildWriterAppend(args.settings, "Summarize content for personal notes. Produce clean, well-structured markdown."),
     allowedTools: ["Skill"],
     phase: "draft",
     emit,
@@ -784,7 +786,7 @@ export async function autoPlace(tabId: string, args: AutoPlaceArgs, emit: Emit):
     settings: args.settings,
     claudeSettings: { ...args.settings, effort: "low", engineReasoning: { ...(args.settings.engineReasoning ?? {}), claude: "low" } },
     prompt: buildAutoPlacePrompt(args.content, structure),
-    append: "Suggest the best file path in the vault for this content. Respond with ONLY the path.",
+    append: buildWriterAppend(args.settings, "Suggest the best file path for this content. Respond with ONLY the path."),
     allowedTools: ["Skill"],
     phase: "draft",
     emit,
@@ -817,7 +819,7 @@ export async function fillinScan(tabId: string, args: FillinScanArgs, emit: Emit
   const finalText = await runWriterTurn({
     settings: args.settings,
     prompt: buildFillinScanPrompt(context, args.prompt),
-    append: "Analyze the vault and return a JSON array of questions about missing information.",
+    append: buildWriterAppend(args.settings, "Analyze the personal context and return a JSON array of questions about missing information."),
     allowedTools: ["Read", "Grep", "Glob"],
     phase: "draft",
     emit,
@@ -847,13 +849,11 @@ export async function fillinWrite(tabId: string, args: FillinWriteArgs, emit: Em
   const context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
 
   const skillNotes = await resolveSkillNotes(args.settings, args.skills, emit);
-  const note = buildSkillsNote(skillNotes);
-  const baseAppend = "Format the user's answer into clean vault markdown. Output ONLY the formatted content.";
   const finalText = await runWriterTurn({
     settings: args.settings,
     prompt: buildFillinAnswerPrompt(context, args.question, args.answer, args.targetPath),
     skills: skillNotes,
-    append: note ? `${baseAppend}\n\n${note}` : baseAppend,
+    append: buildWriterAppend(args.settings, "Format the user's answer into clean markdown. Output ONLY the formatted content."),
     allowedTools: ["Skill"],
     phase: "draft",
     emit,
@@ -879,8 +879,6 @@ export async function writeCleanup(tabId: string, args: WriteCleanupArgs, emit: 
   emit("phase", { phase: "cleanup" });
 
   const skillNotes = await resolveSkillNotes(args.settings, args.skills, emit);
-  const note = buildSkillsNote(skillNotes);
-  const baseAppend = "Clean up and format the text into well-structured vault markdown.";
   const output = await runWriterTurn({
     settings: args.settings,
     claudeSettings: {
@@ -892,7 +890,7 @@ export async function writeCleanup(tabId: string, args: WriteCleanupArgs, emit: 
     },
     prompt: buildWriteCleanupPrompt(args.text),
     skills: skillNotes,
-    append: note ? `${baseAppend}\n\n${note}` : baseAppend,
+    append: buildWriterAppend(args.settings, "Clean up and format the text into well-structured markdown."),
     allowedTools: ["Skill"],
     phase: "cleanup",
     emit,

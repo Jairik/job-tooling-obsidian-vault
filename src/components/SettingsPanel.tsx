@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Settings, TabMode, DesignSettings, SkillInfo, LogEntry } from "../lib/store";
 import { effectiveEngineModel, effectiveEngineReasoning } from "../../shared/settings";
-import { buildJobPersona } from "../../shared/persona";
+import { buildJobPersona, buildAskPersona } from "../../shared/persona";
 import { PREPACKAGED_SKILLS } from "../../shared/prepackaged-skills";
 import { api, type ModelOption } from "../lib/api";
 import { loadFont } from "../lib/fonts";
@@ -459,33 +459,67 @@ export function SettingsPanel({
                       onChange={(e) => onChange({ personaNotes: e.target.value })}
                     />
                   </div>
-                  <button
-                    className="btn"
-                    onClick={() =>
-                      onChange({
-                        persona: buildJobPersona({
-                          userName: settings.userName,
-                          userRole: settings.userRole,
-                          personaNotes: settings.personaNotes,
-                        }),
-                      })
-                    }
-                  >
-                    Regenerate system prompt from profile
-                  </button>
                 </div>
                 <div className="s-section">
-                  <span className="s-section-lbl">Voice</span>
+                  <span className="s-section-lbl">Ask prompt</span>
                   <div className="s-field">
-                    <div className="s-field-label">System prompt</div>
-                    <div className="s-field-desc">Injected into every generation.</div>
+                    <div className="s-field-label">System prompt — Ask mode</div>
+                    <div className="s-field-desc">
+                      Injected into every Ask-mode answer (general questions grounded in your vault) — the
+                      mode new tabs open in.
+                    </div>
                     <textarea
                       className="s-textarea"
-                      rows={10}
+                      rows={9}
+                      spellCheck={false}
+                      value={settings.askPersona}
+                      onChange={(e) => onChange({ askPersona: e.target.value })}
+                    />
+                    <button
+                      className="btn"
+                      onClick={() =>
+                        onChange({
+                          askPersona: buildAskPersona({
+                            userName: settings.userName,
+                            userRole: settings.userRole,
+                            personaNotes: settings.personaNotes,
+                          }),
+                        })
+                      }
+                    >
+                      Regenerate from profile
+                    </button>
+                  </div>
+                </div>
+                <div className="s-section">
+                  <span className="s-section-lbl">Drafting prompt</span>
+                  <div className="s-field">
+                    <div className="s-field-label">System prompt — Job mode</div>
+                    <div className="s-field-desc">
+                      Injected into every Job-mode answer (first-person application drafts written in your
+                      voice).
+                    </div>
+                    <textarea
+                      className="s-textarea"
+                      rows={9}
                       spellCheck={false}
                       value={settings.persona}
                       onChange={(e) => onChange({ persona: e.target.value })}
                     />
+                    <button
+                      className="btn"
+                      onClick={() =>
+                        onChange({
+                          persona: buildJobPersona({
+                            userName: settings.userName,
+                            userRole: settings.userRole,
+                            personaNotes: settings.personaNotes,
+                          }),
+                        })
+                      }
+                    >
+                      Regenerate from profile
+                    </button>
                   </div>
                 </div>
               </div>
