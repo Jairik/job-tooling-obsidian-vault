@@ -16,6 +16,10 @@ interface Props {
   selected: string[];
   onChange: (skills: string[]) => void;
   title?: string;
+  // Optionally control the open state from outside (e.g. a keyboard shortcut).
+  // When omitted, the picker manages its own open state as before.
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 interface MenuPos {
@@ -25,8 +29,14 @@ interface MenuPos {
 }
 
 /* Lets callers choose a deduplicated set of installed skills for a tab request. */
-export function SkillPicker({ availableSkills, selected, onChange, title }: Props) {
-  const [open, setOpen] = useState(false);
+export function SkillPicker({ availableSkills, selected, onChange, title, open: openProp, onOpenChange }: Props) {
+  const [openState, setOpenState] = useState(false);
+  // Controlled when an `open` prop is supplied, otherwise self-managed.
+  const open = openProp ?? openState;
+  const setOpen = (next: boolean) => {
+    if (openProp === undefined) setOpenState(next);
+    onOpenChange?.(next);
+  };
   const [filter, setFilter] = useState("");
   const btnRef = useRef<HTMLButtonElement>(null);
   const [pos, setPos] = useState<MenuPos>({ left: 0, top: 0 });
@@ -63,7 +73,7 @@ export function SkillPicker({ availableSkills, selected, onChange, title }: Prop
         ref={btnRef}
         type="button"
         className={`pill-toggle ${activeCount ? "on" : ""}`}
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => setOpen(!open)}
         title={title ?? "Choose which skills to apply to this interaction"}
         aria-haspopup="true"
         aria-expanded={open}

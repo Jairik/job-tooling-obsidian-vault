@@ -13,6 +13,9 @@ interface Props {
   tab: Tab;
   globalSettings: Settings;
   availableSkills: SkillInfo[];
+  // Lets the parent open the Skills picker via the Ctrl/Cmd+/ shortcut.
+  skillsOpen?: boolean;
+  onSkillsOpenChange?: (open: boolean) => void;
   onPatch: (patch: Partial<Tab>) => void;
   onSummarize: () => void;
   onAutoPlace: () => void;
@@ -29,6 +32,8 @@ export function VaultWriter({
   tab,
   globalSettings,
   availableSkills,
+  skillsOpen,
+  onSkillsOpenChange,
   onPatch,
   onSummarize,
   onAutoPlace,
@@ -331,6 +336,8 @@ export function VaultWriter({
               selected={tab.skills}
               onChange={(s) => onPatch({ skills: s })}
               title="Skills to apply when drafting vault content (summarize / format / fill-in)"
+              open={skillsOpen}
+              onOpenChange={onSkillsOpenChange}
             />
             <span className="vw-skill-hint">Applied when drafting content (not to gap scans or path suggestions).</span>
           </div>

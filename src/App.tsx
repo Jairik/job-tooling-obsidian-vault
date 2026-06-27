@@ -40,6 +40,8 @@ import { Onboarding } from "./components/Onboarding";
 import { HelpGuide } from "./components/HelpGuide";
 import { QuickNotes } from "./components/QuickNotes";
 import { FunBackground } from "./components/FunBackground";
+import { ShortcutsOverlay } from "./components/ShortcutsOverlay";
+import { isEditableTarget } from "./lib/shortcuts";
 import { createConversationActions } from "./lib/conversation-actions";
 
 /* Reads localStorage safely for browsers that block or clear client storage. */
@@ -77,6 +79,8 @@ export function App() {
   // first-run welcome modal's "Explore settings" action).
   const [settingsToHelp, setSettingsToHelp] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
+  // The keyboard-shortcut cheat-sheet (opened with "?").
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   // First-run walkthrough: shown once after onboarding, tracked by a local flag so
   // it never re-appears. The same content also lives under Settings → Help.
   const [helpSeen, setHelpSeen] = useState<boolean>(() => readLS("jt.help.v1") === "seen");
@@ -538,6 +542,62 @@ export function App() {
     });
   };
 
+  // Global keyboard shortcuts. Escape is left to each modal; while any dialog is
+  // open we stay out of the way. Combos are chosen to avoid browser-reserved keys
+  // (Ctrl+T/W/N/1-9), and both Ctrl and ⌘ are accepted so it works on every OS.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") return;
+
+      // The onboarding / first-run modals own the screen — nothing punches through them.
+      const onboardingUp = !settings?.onboarded || (settings?.onboarded && !helpSeen);
+      if (onboardingUp) return;
+
+      // Settings toggles even while it's open, so the same key closes it again.
+      if ((e.metaKey || e.ctrlKey) && e.key === "," && !quickOpen && !shortcutsOpen) {
+        e.preventDefault();
+        setSettingsOpen((o) => !o);
+        return;
+      }
+
+      // Otherwise stay out of the way while any dialog is open (Escape closes them).
+      if (settingsOpen || quickOpen || shortcutsOpen) return;
+
+      // "?" opens the cheat-sheet, but never while typing in a field.
+      if (e.key === "?" && !isEditableTarget(e.target)) {
+        e.preventDefault();
+        setShortcutsOpen(true);
+        return;
+      }
+
+      if (e.metaKey || e.ctrlKey) {
+        if (e.key === "\\") { e.preventDefault(); toggleSplit(); return; }
+        if (e.key === "." && active) {
+          e.preventDefault();
+          const order: TabMode[] = ["ask", "job", "write"];
+          const next = order[(order.indexOf(active.mode) + 1) % order.length];
+          patchTab(active.id, { mode: next });
+          return;
+        }
+        return;
+      }
+
+      if (e.altKey) {
+        if (e.key >= "1" && e.key <= "9") {
+          const idx = Number(e.key) - 1;
+          if (idx < tabs.length) { e.preventDefault(); setActiveId(tabs[idx].id); }
+          return;
+        }
+        // e.code keeps the letter layout-stable (Alt can emit accented chars).
+        if (e.code === "KeyT") { e.preventDefault(); addTab(); return; }
+        if (e.code === "KeyW" && active) { e.preventDefault(); closeTab(active.id); return; }
+        if (e.code === "KeyN") { e.preventDefault(); setQuickOpen((o) => !o); return; }
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [settingsOpen, quickOpen, shortcutsOpen, settings?.onboarded, helpSeen, tabs, active, defaultMode]);
+
   if (!settings) {
     return <div className="loading">Loading…</div>;
   }
@@ -635,6 +695,7 @@ export function App() {
                     <div className="toolbar-dropdown-divider" />
                     <button
                       className={`toolbar-dropdown-item ${split ? "active" : ""}`}
+                      title="Ctrl+\"
                       onClick={() => { toggleSplit(); setToolbarDropOpen(false); }}
                     >
                       <span className="toolbar-dropdown-item-icon">
@@ -661,6 +722,7 @@ export function App() {
                     <div className="toolbar-dropdown-divider" />
                     <button
                       className="toolbar-dropdown-item"
+                      title="Alt+N"
                       onClick={() => { setQuickOpen(true); setToolbarDropOpen(false); }}
                     >
                       <span className="toolbar-dropdown-item-icon">
@@ -673,6 +735,7 @@ export function App() {
                     </button>
                     <button
                       className="toolbar-dropdown-item"
+                      title="Ctrl+,"
                       onClick={() => { setSettingsOpen(true); setToolbarDropOpen(false); }}
                     >
                       <span className="toolbar-dropdown-item-icon">
@@ -691,7 +754,7 @@ export function App() {
             <>
               <button
                 className={`icon-btn ${split ? "active" : ""}`}
-                title={split ? "Close split view" : "Split view"}
+                title={`${split ? "Close split view" : "Split view"} (Ctrl+\\)`}
                 onClick={toggleSplit}
               >
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -701,7 +764,7 @@ export function App() {
               </button>
               <button
                 className={`icon-btn ${quickOpen ? "active" : ""}`}
-                title="Quick notes — reusable links & snippets"
+                title="Quick notes — reusable links & snippets (Alt+N)"
                 onClick={() => setQuickOpen(true)}
               >
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -710,7 +773,7 @@ export function App() {
                 </svg>
               </button>
 
-              <button className="icon-btn" title="Settings" onClick={() => setSettingsOpen(true)}>
+              <button className="icon-btn" title="Settings (Ctrl+,)" onClick={() => setSettingsOpen(true)}>
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                   <circle cx="12" cy="12" r="3" />
                   <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
@@ -792,6 +855,8 @@ export function App() {
       )}
 
       {quickOpen && <QuickNotes onClose={() => setQuickOpen(false)} />}
+
+      {shortcutsOpen && <ShortcutsOverlay onClose={() => setShortcutsOpen(false)} />}
 
       {settings && !settings.onboarded && (
         <Onboarding

@@ -133,6 +133,18 @@ const TOPICS: Topic[] = [
       </>
     ),
   },
+  {
+    icon: <Icon><rect x="2" y="6" width="20" height="12" rx="2" /><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10" /></Icon>,
+    title: "Keyboard shortcuts",
+    body: (
+      <>
+        The app is keyboard-friendly: press <kbd className="kbd">Enter</kbd> to send a
+        question, <kbd className="kbd">Ctrl</kbd>+<kbd className="kbd">/</kbd> to pick
+        skills, and <kbd className="kbd">Ctrl</kbd>+<kbd className="kbd">,</kbd> for
+        settings. Press <kbd className="kbd">?</kbd> anytime to see the full list.
+      </>
+    ),
+  },
 ];
 
 /* Renders the walkthrough sections; `showIntro` adds the one-paragraph overview. */

@@ -2,7 +2,7 @@
 // badge and, for Ask/Job, the input card (job description, question, RAG /
 // Override / Skills controls) plus the streamed answer, activity log and
 // follow-up bar. In Write mode the input card is replaced by the VaultWriter.
-import { useState } from "react";
+import { useState, type KeyboardEvent } from "react";
 import type { Settings, Tab, SkillInfo } from "../lib/store";
 import { effectiveEngineModel, effectiveEngineReasoning } from "../../shared/settings";
 import type { ModelOption } from "../lib/api";
@@ -62,6 +62,8 @@ const WRITE_ICON = (
 /* Displays one tab's mode-specific editor, controls, streamed result, and activity. */
 export function TabView({ tab, globalSettings, models, engines, skills, availableSkills, engineLabel, model, onPatch, onGenerate, onFollowUp, onCleanup, onNewQuestion, onCancel, onSummarize, onAutoPlace, onFillinScan, onFillinWrite, onConfirmFillinWrite, onWriteCleanup, onConfirmWrite }: Props) {
   const [followText, setFollowText] = useState("");
+  // Lets a keyboard shortcut (Ctrl/Cmd+/) open the Skills picker for this pane.
+  const [skillsOpen, setSkillsOpen] = useState(false);
   const running =
     tab.phase === "draft" || tab.phase === "humanize" || tab.phase === "cleanup" || tab.phase === "followup";
   const isAsk = tab.mode === "ask";
@@ -101,8 +103,35 @@ export function TabView({ tab, globalSettings, models, engines, skills, availabl
     setFollowText("");
   };
 
+  // Pane-level shortcuts that should work from anywhere in this tab's editor:
+  // Ctrl/Cmd+Enter submits (handy from the multi-line context field), and
+  // Ctrl/Cmd+/ opens the Skills picker. The Question field's own handler claims
+  // plain Enter (submit) and stops Ctrl/Cmd/Shift+Enter from bubbling here so it
+  // can insert a newline instead.
+  const onPaneKeyDown = (e: KeyboardEvent) => {
+    if (!(e.metaKey || e.ctrlKey)) return;
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (canGenerate) onGenerate();
+    } else if (e.key === "/") {
+      e.preventDefault();
+      setSkillsOpen(true);
+    }
+  };
+
+  // Question field: Enter sends; Shift/Ctrl/Cmd+Enter inserts a newline.
+  const onQuestionKeyDown = (e: KeyboardEvent) => {
+    if (e.key !== "Enter") return;
+    if (e.shiftKey || e.ctrlKey || e.metaKey) {
+      e.stopPropagation(); // let the textarea insert a newline; don't let the pane handler submit
+      return;
+    }
+    e.preventDefault();
+    if (canGenerate) onGenerate();
+  };
+
   return (
-    <div className="tab-content">
+    <div className="tab-content" onKeyDown={onPaneKeyDown}>
       {/* Mode bar */}
       <div className="mode-bar">
         <button className={`mode-btn ${isAsk ? "active" : ""}`} onClick={() => onPatch({ mode: "ask" })} title="Ask general questions about your vault">
@@ -129,6 +158,8 @@ export function TabView({ tab, globalSettings, models, engines, skills, availabl
           tab={tab}
           globalSettings={globalSettings}
           availableSkills={availableSkills}
+          skillsOpen={skillsOpen}
+          onSkillsOpenChange={setSkillsOpen}
           onPatch={onPatch}
           onSummarize={onSummarize}
           onAutoPlace={onAutoPlace}
@@ -164,6 +195,7 @@ export function TabView({ tab, globalSettings, models, engines, skills, availabl
                 placeholder={isAsk ? "Ask anything about your vault…" : "The specific application question to answer…"}
                 value={tab.question}
                 onChange={(e) => onPatch({ question: e.target.value })}
+                onKeyDown={onQuestionKeyDown}
               />
             </div>
 
@@ -199,6 +231,8 @@ export function TabView({ tab, globalSettings, models, engines, skills, availabl
                 availableSkills={availableSkills}
                 selected={tab.skills}
                 onChange={(s) => onPatch({ skills: s })}
+                open={skillsOpen}
+                onOpenChange={setSkillsOpen}
               />
             </div>
 
