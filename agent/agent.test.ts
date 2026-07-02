@@ -1104,10 +1104,20 @@ Output tokens: 2,345
     const workflow = await Bun.file(join(rootPath, ".github", "workflows", "docs.yml")).text();
 
     expect(workflow).toContain("contents: read");
-    expect(workflow).toContain("actions/upload-pages-artifact@v3");
-    expect(workflow).toContain("actions/deploy-pages@v4");
+    expect(workflow).toContain("actions/upload-pages-artifact@v5");
+    expect(workflow).toContain("actions/deploy-pages@v5");
     expect(workflow).toContain("needs: build");
-    expect(workflow).toContain("path: docs");
+    expect(workflow).toContain("if: github.ref == 'refs/heads/main'");
+    expect(workflow).toContain("PAGES_STAGE: ${{ runner.temp }}/pages");
+    expect(workflow).toContain('bun docusaurus build --out-dir "$DOCS_BUILD"');
+    expect(workflow).toContain('cp docs/index.html "$PAGES_STAGE/index.html"');
+    expect(workflow).toContain('cp -R docs/assets "$PAGES_STAGE/assets"');
+    expect(workflow).toContain('cp -R docs/legacy "$PAGES_STAGE/legacy"');
+    expect(workflow).toContain('cp -R "$DOCS_BUILD"/. "$PAGES_STAGE/docs/"');
+    expect(workflow).toContain("path: ${{ env.PAGES_STAGE }}");
+    expect(workflow).toContain("include-hidden-files: true");
+    expect(workflow).toContain("pages: write");
+    expect(workflow).toContain("id-token: write");
     expect(workflow).not.toContain("contents: write");
     expect(workflow).not.toContain("git commit");
     expect(workflow).not.toMatch(/\bgit\s+push\b/);
