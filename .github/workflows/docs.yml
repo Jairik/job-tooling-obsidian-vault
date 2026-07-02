@@ -13,6 +13,8 @@ on:
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
 
 concurrency:
   group: docs-build-deploy
@@ -41,15 +43,6 @@ jobs:
         working-directory: website
         run: bun docusaurus build --out-dir "$DOCS_BUILD"
 
-      - name: Stage Pages artifact
-        run: |
-          rm -rf "$PAGES_STAGE"
-          mkdir -p "$PAGES_STAGE/docs"
-          cp docs/index.html "$PAGES_STAGE/index.html"
-          cp -R docs/assets "$PAGES_STAGE/assets"
-          cp -R docs/legacy "$PAGES_STAGE/legacy"
-          cp -R "$DOCS_BUILD"/. "$PAGES_STAGE/docs/"
-
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
@@ -60,13 +53,8 @@ jobs:
           include-hidden-files: true
 
   deploy:
-    if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
