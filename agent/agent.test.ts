@@ -1099,6 +1099,20 @@ Output tokens: 2,345
     expect(workflowMd).toContain("must be accompanied by a test");
   });
 
+  test("docs workflow deploys a Pages artifact without pushing to main", async () => {
+    const rootPath = join(__dirname, "..");
+    const workflow = await Bun.file(join(rootPath, ".github", "workflows", "docs.yml")).text();
+
+    expect(workflow).toContain("contents: read");
+    expect(workflow).toContain("actions/upload-pages-artifact@v3");
+    expect(workflow).toContain("actions/deploy-pages@v4");
+    expect(workflow).toContain("needs: build");
+    expect(workflow).toContain("path: docs");
+    expect(workflow).not.toContain("contents: write");
+    expect(workflow).not.toContain("git commit");
+    expect(workflow).not.toMatch(/\bgit\s+push\b/);
+  });
+
   test("bundled skill creator guide loads without a source-tree file lookup", async () => {
     const guide = await loadSkillCreatorGuide();
 
