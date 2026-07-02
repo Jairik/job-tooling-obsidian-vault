@@ -1,11 +1,13 @@
-// One tab's main view. Renders the mode bar (Ask / Job / Write) with a model
-// badge and, for Ask/Job, the input card (job description, question, RAG /
+// One tab's main view. Renders the mode bar (Ask / Draft / Write) with a model
+// badge and, for Ask/Draft, the input card (context, question, RAG /
 // Override / Skills controls) plus the streamed answer, activity log and
 // follow-up bar. In Write mode the input card is replaced by the VaultWriter.
 import { useRef, useState, type KeyboardEvent } from "react";
 import type { Settings, Tab, SkillInfo } from "../lib/store";
 import { effectiveEngineModel, effectiveEngineReasoning } from "../../shared/settings";
+import type { EngineScanResult } from "../../shared/engine-scan";
 import type { ModelOption } from "../lib/api";
+import { OTHER_OPTION, modelOptionsForEngine, optionValue, reasoningOptionsForEngine } from "../lib/engine-options";
 import { AnswerStream } from "./AnswerStream";
 import { ActivityLog } from "./ActivityLog";
 import { VaultWriter } from "./VaultWriter";
@@ -17,6 +19,7 @@ interface Props {
   globalSettings: Settings;
   models: ModelOption[];
   engines: ModelOption[];
+  engineScan: EngineScanResult | null;
   skills: { humanizer: boolean; gemini: boolean; opencode: boolean; cursor: boolean; copilot: boolean; codex: boolean };
   availableSkills: SkillInfo[];
   engineLabel: string;
@@ -69,13 +72,15 @@ const WRITE_ICON = (
 );
 
 /* Displays one tab's mode-specific editor, controls, streamed result, and activity. */
-export function TabView({ tab, globalSettings, models, engines, skills, availableSkills, engineLabel, model, onPatch, onGenerate, onFollowUp, onCleanup, onNewQuestion, onCancel, onAttach, onRemoveAttachment, onLatexRecompile, onSummarize, onAutoPlace, onFillinScan, onFillinWrite, onConfirmFillinWrite, onWriteCleanup, onConfirmWrite, onDocUpload, onDocPropose, onDocWrite, onDocDismiss }: Props) {
+export function TabView({ tab, globalSettings, models, engines, engineScan, skills, availableSkills, engineLabel, model, onPatch, onGenerate, onFollowUp, onCleanup, onNewQuestion, onCancel, onAttach, onRemoveAttachment, onLatexRecompile, onSummarize, onAutoPlace, onFillinScan, onFillinWrite, onConfirmFillinWrite, onWriteCleanup, onConfirmWrite, onDocUpload, onDocPropose, onDocWrite, onDocDismiss }: Props) {
   const [followText, setFollowText] = useState("");
   // Lets a keyboard shortcut (Ctrl/Cmd+/) open the Skills picker for this pane.
   const [skillsOpen, setSkillsOpen] = useState(false);
   // "Additional context" chevron dropdown + its hidden file input.
   const [ctxMenuOpen, setCtxMenuOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [customOverrideModelEngine, setCustomOverrideModelEngine] = useState<Settings["engine"] | null>(null);
+  const [customOverrideReasoningEngine, setCustomOverrideReasoningEngine] = useState<Settings["engine"] | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const running =
     tab.phase === "draft" || tab.phase === "humanize" || tab.phase === "cleanup" || tab.phase === "followup" || tab.phase === "render";
@@ -89,6 +94,14 @@ export function TabView({ tab, globalSettings, models, engines, skills, availabl
     onPatch({ override: { ...(tab.override ?? globalSettings), ...patch } });
   const ovModel = effectiveEngineModel(ov);
   const ovReasoning = effectiveEngineReasoning(ov);
+  const ovModelOptions = modelOptionsForEngine(engineScan, ov.engine, models);
+  const ovReasoningOptions = reasoningOptionsForEngine(engineScan, ov.engine);
+  const ovModelSelectValue = optionValue(ovModel, ovModelOptions, customOverrideModelEngine === ov.engine);
+  const ovReasoningSelectValue = optionValue(
+    ovReasoning,
+    ovReasoningOptions,
+    customOverrideReasoningEngine === ov.engine
+  );
 
   const setOverrideModel = (m: string) => {
     setOverride({
@@ -209,7 +222,7 @@ export function TabView({ tab, globalSettings, models, engines, skills, availabl
                 <textarea
                   className="f-area"
                   rows={5}
-                  placeholder="Paste context, details, or a job description (optional but recommended)…"
+                  placeholder="Paste context, details, or source material (optional but useful)…"
                   value={tab.jobDescription}
                   onChange={(e) => onPatch({ jobDescription: e.target.value })}
                 />
@@ -232,7 +245,7 @@ export function TabView({ tab, globalSettings, models, engines, skills, availabl
                 <textarea
                   className="f-area"
                   rows={4}
-                  placeholder="Extra material to ground the draft — notes, prior answers, background…"
+                  placeholder="Extra material to ground the draft: notes, prior answers, background..."
                   value={tab.extraContext}
                   onChange={(e) => onPatch({ extraContext: e.target.value })}
                 />
@@ -246,7 +259,7 @@ export function TabView({ tab, globalSettings, models, engines, skills, availabl
                   <div className="ctx-add-wrap">
                     <button
                       className={`ctx-add-btn ${ctxMenuOpen ? "active" : ""}`}
-                      title="Add additional context — an extra text field or a document"
+                      title="Add additional context: an extra text field or a document"
                       aria-label="Add additional context"
                       disabled={uploading}
                       onClick={() => setCtxMenuOpen((o) => !o)}
@@ -298,7 +311,7 @@ export function TabView({ tab, globalSettings, models, engines, skills, availabl
               <textarea
                 className="f-area"
                 rows={3}
-                placeholder={isAsk ? "Ask anything about your vault…" : "The specific application question to answer…"}
+                placeholder={isAsk ? "Ask anything about your vault…" : "The specific question to answer…"}
                 value={tab.question}
                 onChange={(e) => onPatch({ question: e.target.value })}
                 onKeyDown={onQuestionKeyDown}
@@ -306,7 +319,7 @@ export function TabView({ tab, globalSettings, models, engines, skills, availabl
               {!isAsk && tab.attachments.length > 0 && (
                 <div className="attach-row">
                   {tab.attachments.map((a) => (
-                    <span key={a.id} className={`attach-chip ${a.expired ? "expired" : ""}`} title={a.expired ? "No longer on the server — re-attach it" : `${a.chars.toLocaleString()} characters extracted`}>
+                    <span key={a.id} className={`attach-chip ${a.expired ? "expired" : ""}`} title={a.expired ? "No longer on the server. Re-attach it." : `${a.chars.toLocaleString()} characters extracted`}>
                       <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                         <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                         <polyline points="14 2 14 8 20 8" />
@@ -347,7 +360,7 @@ export function TabView({ tab, globalSettings, models, engines, skills, availabl
               <button
                 className={`pill-toggle ${tab.rag ? "on" : ""}`}
                 onClick={() => onPatch({ rag: !tab.rag })}
-                title="Retrieve only the most relevant vault excerpts instead of reading the whole vault — fewer tokens."
+                title="Retrieve only the most relevant vault excerpts instead of reading the whole vault. Fewer tokens."
               >
                 RAG
               </button>
@@ -384,41 +397,63 @@ export function TabView({ tab, globalSettings, models, engines, skills, availabl
                 )}
                 <label className="field">
                   <span>Model</span>
-                  <input
-                    list={`override-model-options-${tab.id}`}
-                    type="text"
-                    value={ovModel}
-                    placeholder={ov.engine === "opencode" ? "provider/model" : "model id"}
-                    spellCheck={false}
-                    onChange={(e) => setOverrideModel(e.target.value)}
-                  />
-                  <datalist id={`override-model-options-${tab.id}`}>
-                    {models.map((m) => (
-                      <option key={m.id} value={m.id}>
+                  <select
+                    value={ovModelSelectValue}
+                    onChange={(e) => {
+                      if (e.target.value === OTHER_OPTION) {
+                        setCustomOverrideModelEngine(ov.engine);
+                        return;
+                      }
+                      setCustomOverrideModelEngine(null);
+                      setOverrideModel(e.target.value);
+                    }}
+                  >
+                    {ovModelOptions.map((m) => (
+                      <option key={m.id || "__override_default_model__"} value={m.id}>
                         {m.label}
                       </option>
                     ))}
-                    <option value="auto" />
-                  </datalist>
+                    <option value={OTHER_OPTION}>Other...</option>
+                  </select>
+                  {ovModelSelectValue === OTHER_OPTION && (
+                    <input
+                      type="text"
+                      value={ovModel}
+                      placeholder={engineScan?.engines?.[ov.engine]?.modelPlaceholder ?? (ov.engine === "opencode" ? "provider/model" : "model id")}
+                      spellCheck={false}
+                      onChange={(e) => setOverrideModel(e.target.value)}
+                    />
+                  )}
                 </label>
                 <label className="field">
                   <span>Effort</span>
-                  <input
-                    list={`override-reasoning-options-${tab.id}`}
-                    type="text"
-                    value={ovReasoning}
-                    placeholder="low, medium, high, max..."
-                    spellCheck={false}
-                    onChange={(e) => setOverrideReasoning(e.target.value)}
-                  />
-                  <datalist id={`override-reasoning-options-${tab.id}`}>
-                    <option value="low" />
-                    <option value="medium" />
-                    <option value="high" />
-                    <option value="minimal" />
-                    <option value="max" />
-                    <option value="xhigh" />
-                  </datalist>
+                  <select
+                    value={ovReasoningSelectValue}
+                    onChange={(e) => {
+                      if (e.target.value === OTHER_OPTION) {
+                        setCustomOverrideReasoningEngine(ov.engine);
+                        return;
+                      }
+                      setCustomOverrideReasoningEngine(null);
+                      setOverrideReasoning(e.target.value);
+                    }}
+                  >
+                    {ovReasoningOptions.map((r) => (
+                      <option key={r.id || "__override_default_reasoning__"} value={r.id}>
+                        {r.label}
+                      </option>
+                    ))}
+                    <option value={OTHER_OPTION}>Other...</option>
+                  </select>
+                  {ovReasoningSelectValue === OTHER_OPTION && (
+                    <input
+                      type="text"
+                      value={ovReasoning}
+                      placeholder={engineScan?.engines?.[ov.engine]?.reasoningPlaceholder ?? "low, medium, high, max..."}
+                      spellCheck={false}
+                      onChange={(e) => setOverrideReasoning(e.target.value)}
+                    />
+                  )}
                 </label>
                 <label className="field wide">
                   <span>Vault / context repo (this tab)</span>
@@ -459,7 +494,7 @@ export function TabView({ tab, globalSettings, models, engines, skills, availabl
                 <span className="followup-label">Same context, another question?</span>
                 <button
                   className="btn-ghost"
-                  title="Open a new tab with this draft context — a fresh conversation"
+                  title="Open a new tab with this draft context as a fresh conversation"
                   onClick={onNewQuestion}
                 >
                   + New question
@@ -480,7 +515,7 @@ export function TabView({ tab, globalSettings, models, engines, skills, availabl
                 <input
                   className="followup-input"
                   type="text"
-                  placeholder="Follow-up tweak — e.g. “make it shorter, lead with Lunara”…"
+                  placeholder={'Follow-up tweak, e.g. "make it shorter, lead with Lunara"...'}
                   value={followText}
                   disabled={running}
                   onChange={(e) => setFollowText(e.target.value)}

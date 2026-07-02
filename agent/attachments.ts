@@ -6,8 +6,9 @@
 import { join } from "path";
 import { mkdir, readdir, rm, stat } from "fs/promises";
 import type { ExtractedDoc } from "./documents";
+import { dataDir } from "./paths";
 
-const STORE_DIR = join(import.meta.dir, "..", ".attachments");
+const STORE_DIR = join(dataDir(), ".attachments");
 const MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 const MAX_ENTRIES = 50;
 

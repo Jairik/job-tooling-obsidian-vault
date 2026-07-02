@@ -5,16 +5,22 @@
 import { join } from "path";
 import { setBaseUrl } from "./api";
 
-/* Resolves true when the API answers on the given port within the timeout. */
-async function ping(port: number, timeoutMs = 1500): Promise<boolean> {
+/* Resolves true when the API answers at the given origin within the timeout. */
+export async function pingServerUrl(baseUrl: string, timeoutMs = 1500): Promise<boolean> {
+  const base = baseUrl.replace(/\/+$/, "");
   try {
-    const res = await fetch(`http://localhost:${port}/api/meta`, {
+    const res = await fetch(`${base}/api/meta`, {
       signal: AbortSignal.timeout(timeoutMs),
     });
     return res.ok;
   } catch {
     return false;
   }
+}
+
+/* Resolves true when the API answers on the given port within the timeout. */
+async function ping(port: number, timeoutMs = 1500): Promise<boolean> {
+  return pingServerUrl(`http://localhost:${port}`, timeoutMs);
 }
 
 export interface ServerHandle {
@@ -31,7 +37,11 @@ export async function ensureServer(port: number): Promise<ServerHandle> {
   const root = join(import.meta.dir, "..", "..");
   const proc = Bun.spawn(["bun", "server.ts"], {
     cwd: root,
-    env: { ...process.env, PORT: String(port), NODE_ENV: "production" },
+    env: {
+      ...process.env,
+      PORT: String(port),
+      NODE_ENV: "production",
+    },
     stdout: "ignore",
     stderr: "ignore",
   });
@@ -56,4 +66,12 @@ export async function ensureServer(port: number): Promise<ServerHandle> {
     `Could not reach the Vault Assistant server on port ${port}. ` +
       `Try starting it manually with \`bun run dev\` and rerun the TUI.`
   );
+}
+
+/* Points the API client at an existing server and verifies it is reachable. */
+export async function connectServer(serverUrl: string): Promise<ServerHandle> {
+  const base = serverUrl.replace(/\/+$/, "");
+  setBaseUrl(base);
+  if (await pingServerUrl(base, 3000)) return { spawned: false, stop: () => {} };
+  throw new Error(`Could not reach the Vault Assistant server at ${base}.`);
 }

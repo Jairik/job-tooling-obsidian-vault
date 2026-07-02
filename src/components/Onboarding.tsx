@@ -131,7 +131,7 @@ export function Onboarding({ initial, onComplete, onSkip }: OnboardingProps) {
                   style={{ marginLeft: "auto" }}
                   data-tip={
                     vault.valid
-                      ? `Valid — ${vault.foundDirs.length} folder${vault.foundDirs.length === 1 ? "" : "s"} found`
+                      ? `Valid: ${vault.foundDirs.length} folder${vault.foundDirs.length === 1 ? "" : "s"} found`
                       : vault.message || "Invalid path"
                   }
                   tabIndex={0}
@@ -167,7 +167,7 @@ export function Onboarding({ initial, onComplete, onSkip }: OnboardingProps) {
           <div className="s-field">
             <div className="s-field-label">Ask system prompt</div>
             <div className="s-field-desc">
-              Governs Ask mode (general questions answered from your vault) — the mode new tabs open in.
+              Governs Ask mode, the default mode for new tabs.
               Built from the fields above; edit freely.
             </div>
             <textarea
@@ -183,9 +183,9 @@ export function Onboarding({ initial, onComplete, onSkip }: OnboardingProps) {
           </div>
 
           <div className="s-field">
-            <div className="s-field-label">Drafting system prompt</div>
+            <div className="s-field-label">System Prompt Draft Mode</div>
             <div className="s-field-desc">
-              Governs Job mode (first-person application drafts written in your voice).
+              Governs Draft mode for first-person answers written in your voice.
               Built from the fields above; edit freely.
             </div>
             <textarea

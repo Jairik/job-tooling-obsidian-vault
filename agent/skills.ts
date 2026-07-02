@@ -7,6 +7,7 @@ import { homedir } from "os";
 import { join, resolve } from "path";
 import { readdirSync, readFileSync } from "fs";
 import { mkdir, writeFile } from "fs/promises";
+import skillCreatorGuide from "./skills/skill-creator/SKILL.md" with { type: "text" };
 
 /* Returns false instead of throwing when an optional filesystem path is absent. */
 async function exists(path: string): Promise<boolean> {
@@ -187,22 +188,16 @@ export async function loadSelectedSkills(
   return { skills, missing, unreadable };
 }
 
-// The bundled authoring guide the agent reads when writing a skill from a
-// plain-language description. It ships with the app so generation works for every
-// engine without depending on a skill-creator plugin being installed on the host.
-const SKILL_CREATOR_PATH = join(import.meta.dir, "skills", "skill-creator", "SKILL.md");
-
 /*
  * Loads the bundled skill-creator guide as a portable instruction bundle. The full
  * document is carried inline so it can be injected into any engine's prompt the same
  * way user-selected skills are.
  */
 export async function loadSkillCreatorGuide(): Promise<LoadedSkill> {
-  const instructions = await Bun.file(SKILL_CREATOR_PATH).text();
   return {
     name: "skill-creator",
     description: "Author a single portable SKILL.md from a plain-language description.",
-    instructions,
+    instructions: skillCreatorGuide,
   };
 }
 

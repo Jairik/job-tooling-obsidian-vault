@@ -19,6 +19,15 @@ That's it. Open http://localhost:5173.
 
 (Equivalent: `bun install && bun run dev`.)
 
+To change ports, add a local `.env` file:
+
+```bash
+PORT=5173
+```
+
+The app serves the frontend and API from the same Bun process, so one port is
+used for both.
+
 ### First-run setup
 The first time you open the app (when there's no `config.json` yet) a short setup
 modal asks for your **name**, **role**, **vault path**, and optional **voice notes**,
@@ -59,8 +68,8 @@ The original job-application workflow:
 Generated answers are **editable in place** — just click into the answer and type;
 edits persist with the tab. Two icons on the answer card:
 - **↻ Regenerate** — re-runs generation from the current inputs.
-- **✨ Clean up** — sends the current (possibly hand-edited) answer to a lightweight
-  **cleanup model** (default Haiku 4.5) that fixes grammar and polishes the writing
+- **✨ Clean up** — sends the current (possibly hand-edited) answer to the selected
+  **cleanup model** that fixes grammar and polishes the writing
   with the `humanizer` skill (inline rules when the skill isn't installed). It runs
   on a throwaway turn and won't disturb the tab's follow-up session.
 
@@ -132,9 +141,9 @@ a tab to rename it; manual names stick.
 Everything is configurable, globally and per-tab:
 - **Default mode for new tabs** (Ask / Job)
 - **Engine** (Claude Code / Gemini Antigravity)
-- **Model** (Claude only — default Sonnet; Opus / Haiku available)
-- **Cleanup model** (Claude only — lightweight model for the **Clean up** button; default Haiku)
-- **Reasoning effort** (Claude only — low / medium / high)
+- **Model** (configurable per engine)
+- **Cleanup model** (lightweight model for the **Clean up** button; configurable per engine)
+- **Reasoning effort** (main and cleanup reasoning, configurable per engine where supported)
 - **Humanize** pre-packaged skill on/off (all modes; default on — under Skills)
 - **Web-search research** pre-packaged skill on/off (under Skills; SearXNG URL under Retrieval)
 - **RAG** retrieval on/off (default for new tabs; minimizes tokens)

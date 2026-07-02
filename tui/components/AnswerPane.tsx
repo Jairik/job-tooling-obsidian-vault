@@ -14,6 +14,7 @@ interface Props {
   focus?: boolean;
   streaming?: boolean;
   placeholder?: string;
+  showShortcuts?: boolean;
 }
 
 export function AnswerPane({
@@ -24,6 +25,7 @@ export function AnswerPane({
   focus = false,
   streaming = false,
   placeholder = "No answer yet.",
+  showShortcuts = true,
 }: Props) {
   const rendered = useMemo(() => renderMarkdown(text, Math.max(20, width - 2)), [text, width]);
   const lines = rendered ? rendered.split("\n") : [];
@@ -41,6 +43,9 @@ export function AnswerPane({
 
   useInput(
     (input, key) => {
+      // Let Ctrl/Meta combos (Ctrl+K skills, Ctrl+B logs, …) reach the app handler
+      // instead of being swallowed as scroll keys while the pane is focused.
+      if (key.ctrl || key.meta) return;
       if (key.upArrow || input === "k") {
         setFollow(false);
         setOffset((o) => Math.max(0, o - 1));
@@ -86,7 +91,7 @@ export function AnswerPane({
         </Text>
         <Text dimColor>
           {pos}
-          {pos && focus ? " · j/k scroll" : ""}
+          {showShortcuts && pos && focus ? " · j/k scroll" : ""}
           {clamped < maxOffset ? " ▼" : ""}
           {clamped > 0 ? " ▲" : ""}
         </Text>

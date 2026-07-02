@@ -4,6 +4,8 @@ import { join } from "path";
 import {
   DEFAULT_CLAUDE_MODEL,
   DEFAULT_CLEANUP_MODEL,
+  defaultCleanupModels,
+  defaultCleanupReasoning,
   defaultEngineModels,
   defaultEngineReasoning,
   effectiveEngineModel,
@@ -19,8 +21,9 @@ import {
   type TabMode,
 } from "../shared/settings";
 import { buildDefaultSystemPrompt, buildJobPersona, buildAskPersona } from "../shared/persona";
+import { dataDir } from "./paths";
 
-export const DEFAULT_VAULT = process.env.VAULT_DIR || "/home/jj/repos/obsidian-vault";
+export const DEFAULT_VAULT = process.env.VAULT_DIR || "";
 
 export const MODELS = [
   { id: "claude-sonnet-4-6", label: "Sonnet 4.6 (default)" },
@@ -61,7 +64,7 @@ function resolveAskPersona(settings: Pick<CoreSettings, "userName" | "userRole" 
   });
 }
 
-/* Builds the common default system rules that apply outside Ask/Job too. */
+/* Builds the common default system rules that apply outside Ask/Draft too. */
 export function resolveDefaultSystemPrompt(settings: Pick<CoreSettings, "userName" | "userRole" | "personaNotes">): string {
   return buildDefaultSystemPrompt({
     userName: settings.userName,
@@ -79,6 +82,9 @@ export function defaultSettings(vaultDir = DEFAULT_VAULT): ServerSettings {
     effort: "medium",
     engineModels: defaultEngineModels(),
     engineReasoning: defaultEngineReasoning(),
+    cleanupModels: defaultCleanupModels(),
+    cleanupReasoning: defaultCleanupReasoning(),
+    tuiShortcutsVisible: true,
     humanize: true,
     rag: false,
     maxTurns: 24,
@@ -110,6 +116,7 @@ export function normalizeServerSettings(saved: Partial<ServerSettings> = {}, vau
     userRole: typeof raw.userRole === "string" ? raw.userRole : base.userRole,
     personaNotes: typeof raw.personaNotes === "string" ? raw.personaNotes : base.personaNotes,
     onboarded: raw.onboarded === true,
+    tuiShortcutsVisible: raw.tuiShortcutsVisible !== false,
     vaultDir: raw.vaultDir || vaultDir,
     extraDirs: Array.isArray(raw.extraDirs) ? raw.extraDirs : [],
     urlFetchMethod: toUrlFetchMethod(raw.urlFetchMethod),
@@ -260,9 +267,9 @@ export function buildAdditionalContextBlock(
   return parts.join("\n\n");
 }
 
-/* Formats the job description and question used to draft an application answer. */
+/* Formats the draft context and question used to draft a first-person answer. */
 export function buildDraftPrompt(jobDescription: string, question: string, additional = ""): string {
-  return `Job description:
+  return `Draft context:
 """
 ${jobDescription.trim() || "(none provided)"}
 """
@@ -393,7 +400,7 @@ export function buildWriterAppend(
   return `${resolveDefaultSystemPrompt(settings)}
 
 WRITER MODE
-- Use the same source-grounding, project-description, and user-facing phrasing rules as Ask and Job modes.
+- Use the same source-grounding, project-description, and user-facing phrasing rules as Ask and Draft modes.
 - ${taskInstruction.trim()}`;
 }
 
@@ -621,7 +628,7 @@ ${SKILL_OUTPUT_RULES}`;
 }
 
 // ---- Global config persistence ----
-const CONFIG_PATH = join(import.meta.dir, "..", "config.json");
+const CONFIG_PATH = join(dataDir(), "config.json");
 
 /* Loads config.json when available, otherwise returns normalized defaults. */
 export async function loadConfig(): Promise<ServerSettings> {

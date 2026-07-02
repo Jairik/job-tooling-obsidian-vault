@@ -73,7 +73,7 @@ export function DesignSettingsSection({ design, onChange }: Props) {
 
         <label className="field">
           <span>Accent intensity ({(design.accentChroma * 100).toFixed(0)}%)</span>
-          <input type="range" min={0.05} max={0.2} step={0.01} value={design.accentChroma} onChange={(event) => onChange({ accentChroma: Number(event.target.value) })} />
+          <input type="range" min={0.05} max={0.25} step={0.01} value={design.accentChroma} onChange={(event) => onChange({ accentChroma: Number(event.target.value) })} />
         </label>
 
         <div className="color-swatch" style={{ background: "var(--accent)" }} title="Accent color preview" />

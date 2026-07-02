@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "bun --hot server.ts",
     "start": "NODE_ENV=production bun server.ts",
-    "tui": "bun tui/main.tsx"
+    "tui": "bun tui/main.tsx",
+    "desktop": "tauri dev",
+    "desktop:build": "tauri build"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "latest",
@@ -30,6 +32,7 @@
     "unpdf": "^1.6.2"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2",
     "@types/bun": "latest",
     "@types/jsdom": "^28.0.3",
     "@types/react": "^19.0.0",

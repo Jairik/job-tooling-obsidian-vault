@@ -3,13 +3,8 @@
 // in the web toolbar (src/components/TabView.tsx).
 import { Box, Text } from "ink";
 import { effectiveEngineModel, type TabMode } from "../../shared/settings";
+import { BACKEND_MODE_LABEL } from "../lib/modes";
 import type { ServerSettings } from "../lib/api";
-
-const MODE_LABEL: Record<TabMode, string> = {
-  ask: "Ask the Vault",
-  job: "Drafting",
-  write: "Write to Vault",
-};
 
 interface Props {
   mode: TabMode;
@@ -28,7 +23,7 @@ export function Header({ mode, settings, skillsCount, rag }: Props) {
         </Text>
         <Text dimColor>{"  ·  "}</Text>
         <Text color="cyan" bold>
-          {MODE_LABEL[mode]}
+          {BACKEND_MODE_LABEL[mode]}
         </Text>
       </Box>
       <Box>

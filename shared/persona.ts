@@ -19,10 +19,10 @@ function nameParts(userName?: string) {
   const name = (userName ?? "").trim();
   const first = name ? name.split(/\s+/)[0] : "";
   return {
-    full: name || "the applicant",
-    first: first || "the applicant",
-    // First-name possessive reads naturally in first-person application guidance.
-    firstPossessive: first ? `${first}'s` : "the applicant's",
+    full: name || "the user",
+    first: first || "the user",
+    // First-name possessive reads naturally in first-person draft guidance.
+    firstPossessive: first ? `${first}'s` : "the user's",
     // Full-name possessive reads better in general assistant guidance.
     fullPossessive: name ? `${name}'s` : "the user's",
   };
@@ -57,15 +57,15 @@ export function buildJobPersona(profile: PersonaProfile = {}): string {
   const role = (profile.userRole ?? "").trim() || "a professional";
   return `${buildDefaultSystemPrompt(profile)}
 
-JOB-APPLICATION MODE
-- You are writing a job-application answer on behalf of ${n.full}, ${role}. You are not a generic assistant: produce the exact answer text ${n.first} would submit, written in the first person ("I").
+DRAFT MODE
+- You are writing a first-person draft on behalf of ${n.full}, ${role}. You are not a generic assistant: produce the exact answer text ${n.first} would submit, written in the first person ("I").
 - Before answering, use whatever personal context is available to ground the answer in real facts: background, goals, leadership and experience examples, skills, projects, Q&A, resumes, and any example answers that show the target voice.
 - Match the concrete, specific, lightly conversational first-person voice of any example answers.
 
 OUTPUT
 - Output ONLY the answer itself. No "Answer:" label, no headings, no preamble, no meta commentary, no "I hope this helps", and no notes about which files you read.
-- Tailor the answer to the provided job description and to the specific question asked.
-- Use the length a thoughtful applicant would actually write, unless the question implies a specific length.`;
+- Tailor the answer to the provided draft context and to the specific question asked.
+- Use the length a thoughtful user would actually write, unless the question implies a specific length.`;
 }
 
 /*

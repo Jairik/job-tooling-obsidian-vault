@@ -2,16 +2,24 @@
 // global Settings (engine/model/effort, vault dirs, persona, RAG, etc.), the
 // theme/density prefs, and the local DesignSettings (Appearance). Changes are
 // lifted to App, which persists them; this component holds no source of truth.
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, lazy, Suspense, type ReactNode } from "react";
 import type { Settings, TabMode, DesignSettings, SkillInfo, LogEntry } from "../lib/store";
-import { effectiveEngineModel, effectiveEngineReasoning } from "../../shared/settings";
+import {
+  effectiveCleanupModel,
+  effectiveCleanupReasoning,
+  effectiveEngineModel,
+  effectiveEngineReasoning,
+} from "../../shared/settings";
+import type { EngineScanResult } from "../../shared/engine-scan";
 import { buildJobPersona, buildAskPersona } from "../../shared/persona";
 import { PREPACKAGED_SKILLS } from "../../shared/prepackaged-skills";
 import { api, type ModelOption } from "../lib/api";
+import { OTHER_OPTION, modelOptionsForEngine, optionValue, reasoningOptionsForEngine } from "../lib/engine-options";
 import { loadFont } from "../lib/fonts";
-import { UsagePanel } from "./UsagePanel";
-import { LogsView } from "./LogsView";
 import { DesignSettingsSection } from "./DesignSettingsSection";
+
+const UsagePanel = lazy(() => import("./UsagePanel").then((module) => ({ default: module.UsagePanel })));
+const LogsView = lazy(() => import("./LogsView").then((module) => ({ default: module.LogsView })));
 import { HelpGuide } from "./HelpGuide";
 
 type CreateSkillResult = { ok: boolean; error?: string };
@@ -21,6 +29,7 @@ interface Props {
   settings: Settings;
   models: ModelOption[];
   engines: ModelOption[];
+  engineScan: EngineScanResult | null;
   skills: { humanizer: boolean; gemini: boolean; opencode: boolean; cursor: boolean; copilot: boolean; codex: boolean };
   availableSkills: SkillInfo[];
   logs: LogEntry[];
@@ -35,6 +44,7 @@ interface Props {
   onDesignChange: (patch: Partial<DesignSettings>) => void;
   onCreateSkill: (payload: { name: string; description: string; body: string; scope: "user" | "vault" }) => Promise<CreateSkillResult>;
   onRefreshSkills: () => void;
+  onRescanPaths: () => Promise<void>;
   onClearLogs: () => void;
   onClose: () => void;
   initialPage?: PageId;
@@ -68,8 +78,6 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
     </label>
   );
 }
-
-const REASONING_PRESETS = ["low", "medium", "high", "minimal", "max", "xhigh"];
 
 const NAV: { group: string; items: { id: PageId; label: string; icon: ReactNode }[] }[] = [
   {
@@ -120,6 +128,7 @@ export function SettingsPanel({
   settings,
   models,
   engines,
+  engineScan,
   skills,
   availableSkills,
   logs,
@@ -134,6 +143,7 @@ export function SettingsPanel({
   onDesignChange,
   onCreateSkill,
   onRefreshSkills,
+  onRescanPaths,
   onClearLogs,
   onClose,
   initialPage = "general",
@@ -142,6 +152,12 @@ export function SettingsPanel({
   const [vaultInput, setVaultInput] = useState(settings.vaultDir);
   const [vault, setVault] = useState<VaultState | null>(null);
   const [skillFilter, setSkillFilter] = useState("");
+  const [scanBusy, setScanBusy] = useState(false);
+  const [scanError, setScanError] = useState("");
+  const [customModelEngine, setCustomModelEngine] = useState<Settings["engine"] | null>(null);
+  const [customReasoningEngine, setCustomReasoningEngine] = useState<Settings["engine"] | null>(null);
+  const [customCleanupModelEngine, setCustomCleanupModelEngine] = useState<Settings["engine"] | null>(null);
+  const [customCleanupReasoningEngine, setCustomCleanupReasoningEngine] = useState<Settings["engine"] | null>(null);
 
   // "Create skill" flow: describe → agent writes → edit or agent-rewrite → save.
   const [skillFormOpen, setSkillFormOpen] = useState(false);
@@ -160,8 +176,30 @@ export function SettingsPanel({
   const skillAbort = useRef<AbortController | null>(null);
   const currentModel = effectiveEngineModel(settings);
   const currentReasoning = effectiveEngineReasoning(settings);
-  const selectedEngineAvailable =
-    settings.engine === "claude" || Boolean(skills[settings.engine as keyof typeof skills]);
+  const currentCleanupModel = effectiveCleanupModel(settings);
+  const currentCleanupReasoning = effectiveCleanupReasoning(settings);
+  const currentEngineScan = engineScan?.engines?.[settings.engine];
+  const modelOptions = modelOptionsForEngine(engineScan, settings.engine, models);
+  const reasoningOptions = reasoningOptionsForEngine(engineScan, settings.engine);
+  const cleanupModelOptions = modelOptionsForEngine(engineScan, settings.engine, models);
+  const cleanupReasoningOptions = reasoningOptionsForEngine(engineScan, settings.engine);
+  const modelSelectValue = optionValue(currentModel, modelOptions, customModelEngine === settings.engine);
+  const reasoningSelectValue = optionValue(currentReasoning, reasoningOptions, customReasoningEngine === settings.engine);
+  const cleanupModelSelectValue = optionValue(
+    currentCleanupModel,
+    cleanupModelOptions,
+    customCleanupModelEngine === settings.engine
+  );
+  const cleanupReasoningSelectValue = optionValue(
+    currentCleanupReasoning,
+    cleanupReasoningOptions,
+    customCleanupReasoningEngine === settings.engine
+  );
+  const selectedEngineAvailable = Boolean(
+    settings.engine === "claude" ||
+    currentEngineScan?.available ||
+    Boolean(skills[settings.engine as keyof typeof skills])
+  );
 
   /* Updates only the selected engine's model, preserving choices for other engines. */
   const setEngineModel = (model: string) => {
@@ -181,6 +219,35 @@ export function SettingsPanel({
       engineReasoning,
       ...(settings.engine === "claude" ? { effort } : {}),
     });
+  };
+
+  /* Updates only the selected engine's cleanup model. */
+  const setCleanupModel = (model: string) => {
+    const cleanupModels = { ...(settings.cleanupModels ?? {}), [settings.engine]: model };
+    onChange({
+      cleanupModels,
+      ...(settings.engine === "claude" ? { cleanupModel: model } : {}),
+    });
+  };
+
+  /* Updates only the selected engine's cleanup reasoning preference. */
+  const setCleanupReasoning = (reasoning: string) => {
+    const cleanupReasoning = { ...(settings.cleanupReasoning ?? {}), [settings.engine]: reasoning };
+    onChange({ cleanupReasoning });
+  };
+
+  /* Refreshes local CLI path detection and the model/reasoning option scan. */
+  const rescanPaths = async () => {
+    if (scanBusy) return;
+    setScanBusy(true);
+    setScanError("");
+    try {
+      await onRescanPaths();
+    } catch (err) {
+      setScanError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setScanBusy(false);
+    }
   };
 
   /* Stops an in-flight generation both locally and on the server. */
@@ -224,7 +291,7 @@ export function SettingsPanel({
             setSkillDraftReady(true);
             setSkillGenBusy(false);
             if (mode === "rewrite") setSkillFeedback("");
-            if (!d.name) setSkillError("Generated a skill but couldn't read a name — set one before saving.");
+            if (!d.name) setSkillError("Generated a skill but couldn't read a name. Set one before saving.");
           },
           error: (d) => {
             setSkillError(d.message || "Skill generation failed.");
@@ -385,7 +452,7 @@ export function SettingsPanel({
                             ok={vault.valid}
                             tip={
                               vault.valid
-                                ? `Valid — ${vault.foundDirs.length} context dir${vault.foundDirs.length === 1 ? "" : "s"} found`
+                                ? `Valid: ${vault.foundDirs.length} context dir${vault.foundDirs.length === 1 ? "" : "s"} found`
                                 : vault.message || "Invalid path"
                             }
                           />
@@ -393,27 +460,61 @@ export function SettingsPanel({
                       )}
                     </div>
                     <div className="s-field-desc">Path to your Obsidian vault root</div>
-                    <input
-                      className="s-input"
-                      type="text"
-                      value={vaultInput}
-                      spellCheck={false}
-                      onChange={(e) => setVaultInput(e.target.value)}
-                      onBlur={() => onChange({ vaultDir: vaultInput })}
-                    />
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <input
+                        className="s-input"
+                        type="text"
+                        value={vaultInput}
+                        spellCheck={false}
+                        onChange={(e) => setVaultInput(e.target.value)}
+                        onBlur={() => onChange({ vaultDir: vaultInput })}
+                        style={{ flex: 1 }}
+                      />
+                      <button
+                        type="button"
+                        className="btn"
+                        style={{ padding: "6px 12px", whiteSpace: "nowrap" }}
+                        onClick={async () => {
+                          const res = await api.selectDirectory("Select Vault Directory", vaultInput);
+                          if (res && res.path) {
+                            setVaultInput(res.path);
+                            onChange({ vaultDir: res.path });
+                          }
+                        }}
+                      >
+                        Browse...
+                      </button>
+                    </div>
                   </div>
                   <div className="s-field">
                     <div className="s-field-label">Extra context dirs</div>
                     <div className="s-field-desc">Extra directories to include, one per line</div>
-                    <textarea
-                      className="s-textarea"
-                      rows={3}
-                      spellCheck={false}
-                      value={settings.extraDirs.join("\n")}
-                      onChange={(e) =>
-                        onChange({ extraDirs: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean) })
-                      }
-                    />
+                    <div style={{ display: "flex", gap: 8, flexDirection: "column" }}>
+                      <textarea
+                        className="s-textarea"
+                        rows={3}
+                        spellCheck={false}
+                        value={settings.extraDirs.join("\n")}
+                        onChange={(e) =>
+                          onChange({ extraDirs: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean) })
+                        }
+                      />
+                      <button
+                        type="button"
+                        className="btn"
+                        style={{ alignSelf: "flex-start", padding: "6px 12px" }}
+                        onClick={async () => {
+                          const res = await api.selectDirectory("Select Extra Context Directory");
+                          if (res && res.path) {
+                            const newDirs = [...settings.extraDirs, res.path];
+                            const uniqueDirs = Array.from(new Set(newDirs)).map((s) => s.trim()).filter(Boolean);
+                            onChange({ extraDirs: uniqueDirs });
+                          }
+                        }}
+                      >
+                        Browse and add...
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -463,10 +564,9 @@ export function SettingsPanel({
                 <div className="s-section">
                   <span className="s-section-lbl">Ask prompt</span>
                   <div className="s-field">
-                    <div className="s-field-label">System prompt — Ask mode</div>
+                    <div className="s-field-label">System Prompt Ask Mode</div>
                     <div className="s-field-desc">
-                      Injected into every Ask-mode answer (general questions grounded in your vault) — the
-                      mode new tabs open in.
+                      Injected into every Ask-mode answer. This is the default mode for new tabs.
                     </div>
                     <textarea
                       className="s-textarea"
@@ -494,10 +594,9 @@ export function SettingsPanel({
                 <div className="s-section">
                   <span className="s-section-lbl">Drafting prompt</span>
                   <div className="s-field">
-                    <div className="s-field-label">System prompt — Job mode</div>
+                    <div className="s-field-label">System Prompt Draft Mode</div>
                     <div className="s-field-desc">
-                      Injected into every Job-mode answer (first-person application drafts written in your
-                      voice).
+                      Injected into every Draft-mode answer. Use it for first-person drafts written in your voice.
                     </div>
                     <textarea
                       className="s-textarea"
@@ -529,7 +628,19 @@ export function SettingsPanel({
             {page === "engine" && (
               <div className="s-page">
                 <div className="s-section">
-                  <span className="s-section-lbl">Engine &amp; Model</span>
+                  <div className="s-section-head">
+                    <span className="s-section-lbl">Engine &amp; Model</span>
+                    <button className="btn-ghost engine-rescan-btn" type="button" onClick={rescanPaths} disabled={scanBusy}>
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                        <path d="M21 12a9 9 0 0 1-15.5 6.3L3 16" />
+                        <path d="M3 21v-5h5" />
+                        <path d="M3 12A9 9 0 0 1 18.5 5.7L21 8" />
+                        <path d="M21 3v5h-5" />
+                      </svg>
+                      {scanBusy ? "Scanning..." : "Rescan paths"}
+                    </button>
+                  </div>
+                  {scanError && <div className="notice small error">Path scan failed: {scanError}</div>}
                   <div className="s-field">
                     <div className="s-field-label" style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       Engine
@@ -539,8 +650,8 @@ export function SettingsPanel({
                             ok={selectedEngineAvailable}
                             tip={
                               selectedEngineAvailable
-                                ? `${engineCliName(settings.engine)} CLI found. Model and reasoning are passed where this CLI supports flags.`
-                                : `${engineCliName(settings.engine)} CLI not found on PATH — install it or switch back to Claude.`
+                                ? `${currentEngineScan?.path ?? engineCliName(settings.engine)} found. Model and reasoning are passed where this CLI supports them.`
+                                : `${engineCliName(settings.engine)} CLI not found on PATH. Install it or switch back to Claude.`
                             }
                           />
                         </span>
@@ -552,7 +663,8 @@ export function SettingsPanel({
                         onChange={(e) => onChange({ engine: e.target.value as Settings["engine"] })}
                       >
                         {engines.map((en) => {
-                          const isAvailable = en.id === "claude" || skills[en.id as keyof typeof skills];
+                          const scanned = engineScan?.engines?.[en.id as Settings["engine"]];
+                          const isAvailable = en.id === "claude" || scanned?.available || skills[en.id as keyof typeof skills];
                           const selected = settings.engine === en.id;
                           return (
                             <option key={en.id} value={en.id}>
@@ -577,66 +689,147 @@ export function SettingsPanel({
 
                   <div className="s-field">
                     <div className="s-field-label">Model</div>
-                    <input
-                      className="s-input"
-                      list="engine-model-options"
-                      type="text"
-                      value={currentModel}
-                      placeholder={settings.engine === "opencode" ? "provider/model" : "model id"}
-                      spellCheck={false}
-                      onChange={(e) => setEngineModel(e.target.value)}
-                    />
-                    <datalist id="engine-model-options">
-                      {models.map((m) => (
-                        <option key={m.id} value={m.id}>
+                    <select
+                      className="s-select"
+                      style={{ width: "100%" }}
+                      value={modelSelectValue}
+                      onChange={(e) => {
+                        if (e.target.value === OTHER_OPTION) {
+                          setCustomModelEngine(settings.engine);
+                          return;
+                        }
+                        setCustomModelEngine(null);
+                        setEngineModel(e.target.value);
+                      }}
+                    >
+                      {modelOptions.map((m) => (
+                        <option key={m.id || "__default_model__"} value={m.id}>
                           {m.label}
                         </option>
                       ))}
-                      <option value="auto" />
-                    </datalist>
+                      <option value={OTHER_OPTION}>Other...</option>
+                    </select>
+                    {modelSelectValue === OTHER_OPTION && (
+                      <input
+                        className="s-input engine-custom-input"
+                        type="text"
+                        value={currentModel}
+                        placeholder={currentEngineScan?.modelPlaceholder ?? (settings.engine === "opencode" ? "provider/model" : "model id")}
+                        spellCheck={false}
+                        onChange={(e) => setEngineModel(e.target.value)}
+                      />
+                    )}
                   </div>
 
                   <div className="s-field">
                     <div className="s-field-label">Reasoning effort</div>
-                    <input
-                      className="s-input"
-                      list="engine-reasoning-options"
-                      type="text"
-                      value={currentReasoning}
-                      placeholder="low, medium, high, max..."
-                      spellCheck={false}
-                      onChange={(e) => setEngineReasoning(e.target.value)}
-                    />
-                    <datalist id="engine-reasoning-options">
-                      {REASONING_PRESETS.map((r) => (
-                        <option key={r} value={r} />
+                    <select
+                      className="s-select"
+                      style={{ width: "100%" }}
+                      value={reasoningSelectValue}
+                      onChange={(e) => {
+                        if (e.target.value === OTHER_OPTION) {
+                          setCustomReasoningEngine(settings.engine);
+                          return;
+                        }
+                        setCustomReasoningEngine(null);
+                        setEngineReasoning(e.target.value);
+                      }}
+                    >
+                      {reasoningOptions.map((r) => (
+                        <option key={r.id || "__default_reasoning__"} value={r.id}>
+                          {r.label}
+                        </option>
                       ))}
-                    </datalist>
+                      <option value={OTHER_OPTION}>Other...</option>
+                    </select>
+                    {reasoningSelectValue === OTHER_OPTION && (
+                      <input
+                        className="s-input engine-custom-input"
+                        type="text"
+                        value={currentReasoning}
+                        placeholder={currentEngineScan?.reasoningPlaceholder ?? "low, medium, high, max..."}
+                        spellCheck={false}
+                        onChange={(e) => setEngineReasoning(e.target.value)}
+                      />
+                    )}
                   </div>
 
-                  {settings.engine === "claude" && (
-                    <div className="s-field">
-                      <div className="s-field-label">Cleanup model</div>
-                      <div className="s-field-desc">Lightweight model used by the answer card's "Clean up" button.</div>
-                      <select
-                        className="s-select"
-                        style={{ width: "100%" }}
-                        value={settings.cleanupModel}
-                        onChange={(e) => onChange({ cleanupModel: e.target.value })}
-                      >
-                        {models.map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
+                  <div className="s-field">
+                    <div className="s-field-label">Cleanup model</div>
+                    <div className="s-field-desc">Lightweight model used by the answer card's "Clean up" button.</div>
+                    <select
+                      className="s-select"
+                      style={{ width: "100%" }}
+                      value={cleanupModelSelectValue}
+                      onChange={(e) => {
+                        if (e.target.value === OTHER_OPTION) {
+                          setCustomCleanupModelEngine(settings.engine);
+                          return;
+                        }
+                        setCustomCleanupModelEngine(null);
+                        setCleanupModel(e.target.value);
+                      }}
+                    >
+                      {cleanupModelOptions.map((m) => (
+                        <option key={m.id || "__default_cleanup_model__"} value={m.id}>
+                          {m.label}
+                        </option>
+                      ))}
+                      <option value={OTHER_OPTION}>Other...</option>
+                    </select>
+                    {cleanupModelSelectValue === OTHER_OPTION && (
+                      <input
+                        className="s-input engine-custom-input"
+                        type="text"
+                        value={currentCleanupModel}
+                        placeholder={currentEngineScan?.modelPlaceholder ?? (settings.engine === "opencode" ? "provider/model" : "model id")}
+                        spellCheck={false}
+                        onChange={(e) => setCleanupModel(e.target.value)}
+                      />
+                    )}
+                  </div>
+
+                  <div className="s-field">
+                    <div className="s-field-label">Cleanup reasoning effort</div>
+                    <select
+                      className="s-select"
+                      style={{ width: "100%" }}
+                      value={cleanupReasoningSelectValue}
+                      onChange={(e) => {
+                        if (e.target.value === OTHER_OPTION) {
+                          setCustomCleanupReasoningEngine(settings.engine);
+                          return;
+                        }
+                        setCustomCleanupReasoningEngine(null);
+                        setCleanupReasoning(e.target.value);
+                      }}
+                    >
+                      {cleanupReasoningOptions.map((r) => (
+                        <option key={r.id || "__default_cleanup_reasoning__"} value={r.id}>
+                          {r.label}
+                        </option>
+                      ))}
+                      <option value={OTHER_OPTION}>Other...</option>
+                    </select>
+                    {cleanupReasoningSelectValue === OTHER_OPTION && (
+                      <input
+                        className="s-input engine-custom-input"
+                        type="text"
+                        value={currentCleanupReasoning}
+                        placeholder={currentEngineScan?.reasoningPlaceholder ?? "low, medium, high, max..."}
+                        spellCheck={false}
+                        onChange={(e) => setCleanupReasoning(e.target.value)}
+                      />
+                    )}
+                  </div>
                 </div>
 
                 <div className="s-section">
                   <span className="s-section-lbl">Usage</span>
-                  <UsagePanel engine={settings.engine} model={currentModel} />
+                  <Suspense fallback={<div className="loading">Loading usage charts…</div>}>
+                    <UsagePanel engine={settings.engine} model={currentModel} />
+                  </Suspense>
                 </div>
               </div>
             )}
@@ -679,8 +872,8 @@ export function SettingsPanel({
                     </select>
                   </div>
                   <p className="notice small">
-                    Turn web research on or off under <strong>Settings → Skills</strong> (the “Web-search research”
-                    pre-packaged skill). Configure its SearXNG endpoint below.
+                    Turn web research on or off under <strong>Settings -&gt; Skills</strong>. The Web-search research
+                    skill uses the SearXNG endpoint below.
                   </p>
                   <div className="s-field">
                     <div className="s-field-label">Local SearXNG URL</div>
@@ -704,7 +897,7 @@ export function SettingsPanel({
                 <div className="s-section">
                   <span className="s-section-lbl">Pre-packaged skills</span>
                   <p className="notice small">
-                    Built-in capabilities that ship with the app. Toggle them here; they apply to every tab.
+                    These built-in capabilities ship with the app. Toggle them here to apply them to every tab.
                   </p>
                   {PREPACKAGED_SKILLS.map((skill) => (
                     <div key={skill.id}>
@@ -761,9 +954,9 @@ export function SettingsPanel({
                 <div className="s-section">
                   <span className="s-section-lbl">Create skill</span>
                   <p className="notice small">
-                    Describe what you want and the agent writes the <code>SKILL.md</code> for you using the
-                    skill-creator skill. Then edit it yourself or ask the agent to revise it before saving to
-                    <code> ~/.claude/skills</code> (user) or the vault's <code>.claude/skills</code> (vault).
+                    Describe the skill you want. The agent writes the <code>SKILL.md</code> with the
+                    skill-creator skill, then you can edit it or ask for a revision before saving it to
+                    <code> ~/.claude/skills</code> (user) or <code>.claude/skills</code> in the vault.
                   </p>
                   {skillOk && <div className="vault-status ok">{skillOk}</div>}
                   {!skillFormOpen ? (
@@ -901,7 +1094,9 @@ export function SettingsPanel({
               <div className="s-page">
                 <div className="s-section">
                   <span className="s-section-lbl">Activity</span>
-                  <LogsView logs={logs} onClear={onClearLogs} />
+                  <Suspense fallback={<div className="loading">Loading activity logs…</div>}>
+                    <LogsView logs={logs} onClear={onClearLogs} />
+                  </Suspense>
                 </div>
               </div>
             )}

@@ -1,5 +1,5 @@
 // A controlled multi-line text input with a visible cursor, line-based rendering,
-// and a row cap (so a long job description doesn't blow up the layout — it scrolls
+// and a row cap (so long draft context doesn't blow up the layout, it scrolls
 // around the cursor instead). Handles printable input (incl. pasted chunks),
 // backspace, arrow navigation, newline insertion, Enter-to-submit, and an
 // "open in $EDITOR" escape via Ctrl+O. ink-text-input is single-line only, so the

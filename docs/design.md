@@ -14,7 +14,8 @@ hex values.
 
 - **Color** — `--bg`, `--surface`, `--fg`, `--muted`, `--border`, `--accent`
   (links/affordances), `--accent-strong` (primary fills), and the status hues
-  `--success` / `--warning` / `--danger`.
+  `--success` / `--warning` / `--danger`. The default accent is Obsidian purple
+  and can still be customized from Appearance.
 - **Type** — `--font-display` (headings), `--font-body` (prose), `--font-mono`
   (labels, meta, logs).
 - **Rhythm** — `--space-1…6`, `--radius-1/2/pill`, `--shadow-card`, and a focus

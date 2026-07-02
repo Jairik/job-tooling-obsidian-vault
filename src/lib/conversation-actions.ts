@@ -1,7 +1,7 @@
 /* Client-side orchestration for streamed generate, follow-up, cleanup, and cancel actions. */
 import { api, streamPost } from "./api";
 import { deriveTitleLocal, overrideSettingsBody, type LogEntry, type Settings, type Tab } from "./store";
-import { effectiveEngineModel } from "../../shared/settings";
+import { effectiveCleanupModel, effectiveEngineModel } from "../../shared/settings";
 
 type UpdateTab = (id: string, patch: Partial<Tab> | ((tab: Tab) => Partial<Tab>)) => void;
 type AddLog = (entry: Omit<LogEntry, "id" | "ts">) => void;
@@ -204,7 +204,7 @@ export function createConversationActions({ settings, controllers, updateTab, ad
 
     const overrideBody = overrideSettingsBody(tab, settings);
     const effectiveSettings = tab.overrideEnabled ? tab.override ?? settings : settings;
-    const model = effectiveSettings.engine === "claude" ? effectiveSettings.cleanupModel : effectiveEngineModel(effectiveSettings);
+    const model = effectiveCleanupModel(effectiveSettings);
     const meta = { tabId: tab.id, tabName: tab.name, tabColor: tab.color };
     const startedAt = Date.now();
     addLog({ ...meta, kind: "cleanup", engine: effectiveSettings.engine, model });

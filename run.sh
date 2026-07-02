@@ -11,10 +11,22 @@ fi
 # Load .env if present (for VAULT_DIR / PORT)
 if [ -f .env ]; then set -a; . ./.env; set +a; fi
 
+PORT="${PORT:-5173}"
+export PORT
+
+if [ "${1:-}" = "--tui" ]; then
+  shift
+  echo "Installing dependencies..."
+  bun install
+  echo ""
+  echo "Vault Assistant TUI starting..."
+  echo ""
+  exec bun run tui -- "$@"
+fi
+
 echo "Installing dependencies..."
 bun install
 
-PORT="${PORT:-5173}"
 echo ""
 echo "Vault Assistant starting on http://localhost:${PORT}"
 echo "Press Ctrl+C to stop."

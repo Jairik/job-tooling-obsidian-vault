@@ -2,7 +2,7 @@
 import index from "./src/index.html";
 import { generate, followUp, cleanup, cancel, loadSessions, summarize, autoPlace, fillinScan, fillinWrite, writeCleanup, generateSkill, docPropose } from "./agent/runner";
 import { detectSkills, listSkills, createSkill } from "./agent/skills";
-import { geminiAvailable, cliAvailable } from "./agent/gemini";
+import { engineAvailabilityStatus, scanEngines } from "./agent/engine-scan";
 import { readLogs, appendLog, clearLogs } from "./agent/logs";
 import { fetchUsageForTarget } from "./agent/usage";
 import { resolveWebPage } from "./agent/web";
@@ -11,10 +11,17 @@ import { saveAttachment, getAttachment, deleteAttachment, resolveAttachments, sw
 import { compileLatex, getCompiled, stripTexFences, tectonicAvailable, tectonicInstallHint } from "./agent/latex";
 import { loadConfig, saveConfig, defaultSettings, mergeServerSettings, MODELS, ENGINES, DEFAULT_VAULT, type ServerSettings } from "./agent/config";
 import { effectiveEngineModel } from "./shared/settings";
+import { loadDotEnv, resolveAppPort } from "./shared/ports";
 import { stat } from "fs/promises";
+import { showDirectoryPicker } from "./agent/dialog";
+// Embedded at build time so the logo survives `bun build --compile` (a compiled
+// binary can't read src/assets from disk via import.meta.url).
+import logoPath from "./src/assets/vault-assistant-logo-v2.png" with { type: "file" };
 
-const PORT = Number(process.env.PORT || 5173);
+loadDotEnv();
+const PORT = resolveAppPort();
 const DEV = process.env.NODE_ENV !== "production";
+const LOGO_FILE = Bun.file(logoPath);
 
 await loadSessions();
 sweepAttachments().catch(() => {});
@@ -98,17 +105,31 @@ function usageEngine(value: string | null, fallback: ServerSettings["engine"]): 
   return ENGINES.some((engine) => engine.id === value) ? (value as ServerSettings["engine"]) : fallback;
 }
 
-const server = Bun.serve({
-  port: PORT,
+/* Serves the app logo for favicon and non-bundled asset requests. */
+function logoResponse(): Response {
+  return new Response(LOGO_FILE, {
+    headers: {
+      "Content-Type": "image/png",
+      "Cache-Control": "public, max-age=31536000, immutable",
+    },
+  });
+}
+
+const serverConfig = {
   development: DEV,
   idleTimeout: 0, // keep SSE streams open for long generations
 
   routes: {
     "/": index,
+    "/assets/vault-assistant-logo-v2.png": logoResponse,
+    "/vault-assistant-logo-v2.png": logoResponse,
 
     /* Supplies static UI metadata without exposing server-only configuration. */
     "/api/meta": () =>
       Response.json({ models: MODELS, engines: ENGINES, defaults: defaultSettings(DEFAULT_VAULT) }),
+
+    /* Scans local agent executables and returns model/reasoning choices per engine. */
+    "/api/engines/scan": () => Response.json(scanEngines()),
 
     /* Reads and partially updates durable application settings. */
     "/api/config": {
@@ -149,13 +170,10 @@ const server = Bun.serve({
       const url = new URL(req.url);
       const vault = url.searchParams.get("vault") || (await loadConfig()).vaultDir;
       const skills = await detectSkills(vault);
+      const scan = scanEngines();
       return Response.json({
         ...skills,
-        gemini: geminiAvailable(),
-        opencode: cliAvailable("opencode"),
-        cursor: cliAvailable("cursor"),
-        copilot: cliAvailable("copilot"),
-        codex: cliAvailable("codex"),
+        ...engineAvailabilityStatus(scan),
       });
     },
 
@@ -232,6 +250,15 @@ const server = Bun.serve({
       } catch {
         return Response.json({ valid: false, isDir: false, foundDirs: [], message: "Path not found" });
       }
+    },
+
+    // Triggers the host OS's native directory picker dialog and returns the selected path.
+    "/api/dialog/select-dir": async (req) => {
+      const url = new URL(req.url);
+      const title = url.searchParams.get("title") || undefined;
+      const defaultPath = url.searchParams.get("defaultPath") || undefined;
+      const path = await showDirectoryPicker({ title, defaultPath });
+      return Response.json({ path });
     },
 
     "/api/tabs/:id/generate": {
@@ -550,6 +577,11 @@ const server = Bun.serve({
     console.error(err);
     return new Response(`Server error: ${err?.message ?? err}`, { status: 500 });
   },
+};
+
+const server = Bun.serve({
+  port: PORT,
+  ...serverConfig,
 });
 
 console.log(`\n  Vault Assistant → http://localhost:${server.port}\n`);

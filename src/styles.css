@@ -23,11 +23,10 @@
   --border-2:    oklch(85%   0.007 248);
 
   /* ── Accent ──
-     Hue/chroma read CSS vars when present (falls back to the design blue).
-     The app does not currently set --accent-hue/--accent-chroma, so the
-     fallbacks apply — matching the previous fixed-accent behavior. */
-  --accent:      oklch(57% var(--accent-chroma, 0.19) var(--accent-hue, 255));
-  --accent-h:    oklch(52% var(--accent-chroma, 0.21) var(--accent-hue, 255));
+     Hue/chroma read CSS vars when present; before React applies saved design
+     settings, the fallbacks use Obsidian purple. */
+  --accent:      oklch(57% var(--accent-chroma, 0.24) var(--accent-hue, 293));
+  --accent-h:    oklch(52% var(--accent-chroma, 0.24) var(--accent-hue, 293));
   --accent-fg:   oklch(100% 0 0);
   --accent-sub:  color-mix(in oklch, var(--accent) 10%, transparent);
   --accent-sub2: color-mix(in oklch, var(--accent) 5%, transparent);
@@ -99,8 +98,8 @@
   --border:    oklch(26%   0.011 255);
   --border-2:  oklch(33%   0.011 255);
 
-  --accent:      oklch(63% var(--accent-chroma, 0.19) var(--accent-hue, 255));
-  --accent-h:    oklch(68% var(--accent-chroma, 0.21) var(--accent-hue, 255));
+  --accent:      oklch(63% var(--accent-chroma, 0.24) var(--accent-hue, 293));
+  --accent-h:    oklch(68% var(--accent-chroma, 0.24) var(--accent-hue, 293));
   --accent-sub:  color-mix(in oklch, var(--accent) 15%, transparent);
   --accent-sub2: color-mix(in oklch, var(--accent) 7%, transparent);
 
@@ -218,12 +217,14 @@ code {
 }
 .logo-mark {
   width: 26px; height: 26px; border-radius: var(--r-sm);
-  background: var(--accent);
-  display: flex; align-items: center; justify-content: center;
-  color: var(--accent-fg); font-size: 12px; font-weight: 700; letter-spacing: -0.02em;
+  display: block; object-fit: contain;
   flex-shrink: 0;
 }
-.logo-text { font-size: 13px; font-weight: 600; color: var(--fg); letter-spacing: -0.02em; white-space: nowrap; }
+.logo-text {
+  display: flex; flex-direction: column; justify-content: center;
+  font-size: 11px; line-height: 1.05; font-weight: 650; color: var(--fg);
+  letter-spacing: 0; white-space: nowrap; text-transform: lowercase;
+}
 
 /* Tabs */
 .tabstrip { display: flex; align-items: center; gap: 2px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
@@ -663,6 +664,10 @@ textarea:focus, input:focus, select:focus { border-color: var(--accent); box-sha
 .s-page { display: flex; flex-direction: column; gap: 20px; }
 .s-section { display: flex; flex-direction: column; gap: 8px; }
 .s-section-lbl { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--subtle); padding: 0 2px; }
+.s-section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.engine-rescan-btn { min-height: 30px; padding: 5px 9px; }
+.engine-rescan-btn svg { flex: none; }
+.engine-custom-input { margin-top: 8px; }
 
 .s-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 11px 14px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md); }
 .s-row-label { font-size: 13.5px; font-weight: 500; color: var(--fg); letter-spacing: -0.01em; }

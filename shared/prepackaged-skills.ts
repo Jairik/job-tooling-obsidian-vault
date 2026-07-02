@@ -30,8 +30,8 @@ export const PREPACKAGED_SKILLS: PrepackagedSkill[] = [
     id: "web-search-research",
     name: "Web-search research",
     description:
-      "Lets the agent search the web on-demand (through your local SearXNG) when current info would improve the answer.",
+      "Lets the agent search the web through your local SearXNG when current information would improve an answer.",
     settingKey: "webResearchEnabled",
-    note: "Requires a local SearXNG instance — set its URL under Settings → Retrieval.",
+    note: "Requires a local SearXNG instance. Set its URL under Settings -> Retrieval.",
   },
 ];

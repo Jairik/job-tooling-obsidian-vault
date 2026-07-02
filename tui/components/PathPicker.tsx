@@ -14,6 +14,7 @@ interface Props {
   onSubmit?: () => void;
   focus?: boolean;
   placeholder?: string;
+  showShortcuts?: boolean;
 }
 
 /* Flattens the directory tree into relative paths for suggestion matching. */
@@ -25,7 +26,7 @@ function flatten(nodes: TreeNode[], acc: string[] = []): string[] {
   return acc;
 }
 
-export function PathPicker({ vaultDir, value, onChange, onSubmit, focus = false, placeholder = "" }: Props) {
+export function PathPicker({ vaultDir, value, onChange, onSubmit, focus = false, placeholder = "", showShortcuts = true }: Props) {
   const [dirs, setDirs] = useState<string[]>([]);
   const [hl, setHl] = useState(0);
 
@@ -86,7 +87,7 @@ export function PathPicker({ vaultDir, value, onChange, onSubmit, focus = false,
               {d}/
             </Text>
           ))}
-          <Text dimColor>{"  ↑/↓ pick · → complete dir · Enter confirm"}</Text>
+          {showShortcuts ? <Text dimColor>{"  ↑/↓ pick · → complete dir · Enter confirm"}</Text> : null}
         </Box>
       ) : null}
     </Box>

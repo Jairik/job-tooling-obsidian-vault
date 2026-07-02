@@ -4,8 +4,8 @@
 import type { TabMode } from "../../shared/settings";
 
 export type { TabMode } from "../../shared/settings";
-export type WriteMode = "summarize" | "manual" | "fillin";
-export type Phase = "idle" | "draft" | "humanize" | "cleanup" | "followup" | "done" | "error";
+export type WriteMode = "summarize" | "manual" | "fillin" | "document";
+export type Phase = "idle" | "draft" | "humanize" | "cleanup" | "followup" | "render" | "done" | "error";
 
 export interface Activity {
   tool: string;
@@ -26,13 +26,40 @@ export interface FillinQuestion {
   preview?: string;
 }
 
+export interface AttachmentMeta {
+  id: string;
+  name: string;
+  size: number;
+  chars: number;
+  truncated: boolean;
+  expired?: boolean;
+}
+
+export type DocAction = "create" | "append" | "update";
+
+export interface DocProposal {
+  id: string;
+  targetPath: string;
+  action: DocAction;
+  content: string;
+  rationale: string;
+  status: "pending" | "written" | "rejected";
+}
+
 export interface Session {
   id: string;
   mode: TabMode;
   jobDescription: string;
   question: string;
+  extraContext: string;
+  attachments: AttachmentMeta[];
   skills: string[];
   rag: boolean;
+  latex: boolean;
+  texSource: string;
+  latexCompileId: string;
+  latexLog: string;
+  latexBusy?: boolean;
   draft: string;
   answer: string;
   messages: ChatMsg[];
@@ -48,6 +75,9 @@ export interface Session {
   writeConfirmed: boolean;
   fillinQuestions: FillinQuestion[];
   fillinDir: string;
+  docUploadPath: string;
+  docAttachment?: AttachmentMeta;
+  docProposals: DocProposal[];
 }
 
 /* Generates a unique conversation id (drives a fresh server-side session). */
@@ -62,8 +92,15 @@ export function newSession(mode: TabMode = "ask", base?: Partial<Session>): Sess
     mode,
     jobDescription: "",
     question: "",
+    extraContext: "",
+    attachments: [],
     skills: base?.skills ?? [],
     rag: base?.rag ?? false,
+    latex: base?.latex ?? false,
+    texSource: "",
+    latexCompileId: "",
+    latexLog: "",
+    latexBusy: false,
     draft: "",
     answer: "",
     messages: [],
@@ -78,10 +115,13 @@ export function newSession(mode: TabMode = "ask", base?: Partial<Session>): Sess
     writeConfirmed: false,
     fillinQuestions: [],
     fillinDir: "",
+    docUploadPath: "",
+    docAttachment: undefined,
+    docProposals: [],
   };
 }
 
 /* Returns true when a request is in flight for this session. */
 export function isRunning(phase: Phase): boolean {
-  return phase === "draft" || phase === "humanize" || phase === "cleanup" || phase === "followup";
+  return phase === "draft" || phase === "humanize" || phase === "cleanup" || phase === "followup" || phase === "render";
 }

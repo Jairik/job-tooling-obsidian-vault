@@ -2,6 +2,7 @@
 // body manually (EventSource only supports GET).
 import type { SkillInfo, LogEntry, UrlFetchMethod, AttachmentMeta } from "./store";
 import type { UsageResult, UsageTarget } from "../../shared/usage";
+import type { EngineScanResult } from "../../shared/engine-scan";
 
 export type SSEHandlers = Record<string, (data: any) => void>;
 
@@ -64,6 +65,7 @@ export interface ModelOption {
 export const api = {
   meta: (): Promise<{ models: ModelOption[]; engines: ModelOption[]; defaults: any }> =>
     fetch("/api/meta").then((r) => r.json()),
+  engineScan: (): Promise<EngineScanResult> => fetch("/api/engines/scan").then((r) => r.json()),
   getConfig: (): Promise<any> => fetch("/api/config").then((r) => r.json()),
   saveConfig: (patch: unknown): Promise<any> =>
     fetch("/api/config", {
@@ -171,4 +173,10 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url, method }),
     }).then((r) => r.json()),
+  selectDirectory: (title?: string, defaultPath?: string): Promise<{ path: string | null }> => {
+    const params = new URLSearchParams();
+    if (title) params.set("title", title);
+    if (defaultPath) params.set("defaultPath", defaultPath);
+    return fetch(`/api/dialog/select-dir?${params}`).then((r) => r.json());
+  },
 };

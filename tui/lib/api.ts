@@ -2,8 +2,12 @@
 // React web app uses (see src/lib/api.ts). The only difference is that Ink runs
 // outside a browser, so fetch needs an absolute base URL instead of a relative one.
 import type { CoreSettings } from "../../shared/settings";
+import type { EngineScanResult } from "../../shared/engine-scan";
+import { DEFAULT_PORT } from "../../shared/ports";
+import type { UsageResult, UsageTarget } from "../../shared/usage";
+import { basename } from "path";
 
-let BASE = "http://localhost:5173";
+let BASE = `http://localhost:${DEFAULT_PORT}`;
 
 /* Points the client at a specific server origin (host:port). */
 export function setBaseUrl(url: string): void {
@@ -49,6 +53,29 @@ export interface TreeNode {
   path: string;
   children?: TreeNode[];
   isFile?: boolean;
+}
+
+export interface LogEntry {
+  id: string;
+  ts: number;
+  tabId?: string;
+  tabName?: string;
+  tabColor?: string;
+  kind: string;
+  engine?: string;
+  model?: string;
+  question?: string;
+  durationMs?: number;
+  chars?: number;
+  detail?: string;
+}
+
+export interface AttachmentMeta {
+  id: string;
+  name: string;
+  size: number;
+  chars: number;
+  truncated: boolean;
 }
 
 export type SSEHandlers = Record<string, (data: any) => void>;
@@ -121,6 +148,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 /* Named wrappers for each non-streaming server endpoint, mirroring src/lib/api.ts. */
 export const api = {
   meta: (): Promise<MetaResult> => getJson<MetaResult>("/api/meta"),
+  engineScan: (): Promise<EngineScanResult> => getJson<EngineScanResult>("/api/engines/scan"),
   getConfig: (): Promise<ServerSettings> => getJson<ServerSettings>("/api/config"),
   saveConfig: (patch: Partial<ServerSettings>): Promise<ServerSettings> =>
     postJson<ServerSettings>("/api/config", patch),
@@ -150,17 +178,39 @@ export const api = {
     getJson(`/api/vault/validate?path=${encodeURIComponent(path)}`),
   cancel: (id: string): Promise<unknown> =>
     fetch(`${BASE}/api/tabs/${id}/cancel`, { method: "POST" }).catch(() => undefined),
+  usage: (target?: UsageTarget): Promise<UsageResult> => {
+    const query = target ? `?${new URLSearchParams({ engine: target.engine, model: target.model })}` : "";
+    return getJson<UsageResult>(`/api/usage${query}`);
+  },
+  getLogs: (): Promise<LogEntry[]> => getJson<LogEntry[]>("/api/logs"),
+  appendLog: (entry: LogEntry): Promise<unknown> => postJson("/api/logs", entry),
+  clearLogs: (): Promise<unknown> =>
+    fetch(`${BASE}/api/logs`, { method: "DELETE" }).then((r) => r.json()),
   vaultTree: (vault: string): Promise<TreeNode[]> =>
     getJson<TreeNode[]>(`/api/vault/tree?path=${encodeURIComponent(vault)}`),
-  // The server requires a one-time preview token before it accepts a write, so
-  // every write is previewed first — this is the same mandatory approval gate
-  // the web UI enforces, with the TUI's explicit confirm keypress standing in
-  // for the diff modal.
-  vaultWrite: async (path: string, content: string): Promise<{ ok: boolean; path: string; error?: string }> => {
-    const preview = await postJson<{ ok: boolean; token?: string; error?: string }>("/api/vault/preview", { path });
-    if (!preview.ok || !preview.token) return { ok: false, path, error: preview.error || "Could not preview this write." };
-    return postJson("/api/vault/write", { path, content, token: preview.token });
+  vaultPreview: (
+    path: string
+  ): Promise<{ ok: boolean; path: string; exists: boolean; existingContent: string; tooLarge?: boolean; token: string; error?: string }> =>
+    postJson("/api/vault/preview", { path }),
+  vaultWrite: (path: string, content: string, token: string): Promise<{ ok: boolean; path: string; error?: string }> =>
+    postJson("/api/vault/write", { path, content, token }),
+  uploadAttachmentPath: async (
+    path: string
+  ): Promise<{ ok: boolean; error?: string } & Partial<AttachmentMeta>> => {
+    const file = Bun.file(path);
+    const fd = new FormData();
+    fd.append("file", file, basename(path));
+    const res = await fetch(`${BASE}/api/attachments`, { method: "POST", body: fd });
+    return (await res.json()) as { ok: boolean; error?: string } & Partial<AttachmentMeta>;
   },
+  getAttachment: (id: string): Promise<{ ok: boolean } & Partial<AttachmentMeta>> =>
+    getJson(`/api/attachments/${id}`),
+  deleteAttachment: (id: string): Promise<unknown> =>
+    fetch(`${BASE}/api/attachments/${id}`, { method: "DELETE" }).then((r) => r.json()),
+  latexCompile: (
+    tex: string
+  ): Promise<{ ok: boolean; compileId?: string; pdfUrl?: string; error?: string; log?: string; hint?: string }> =>
+    postJson("/api/latex/compile", { tex }),
   fetchUrl: (
     url: string,
     method: ServerSettings["urlFetchMethod"]

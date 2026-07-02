@@ -94,18 +94,36 @@ export interface DesignSettings {
   toolbarDropdown: boolean;
 }
 
+export const OBSIDIAN_PURPLE_ACCENT_HUE = 293;
+export const OBSIDIAN_PURPLE_ACCENT_CHROMA = 0.24;
+
+const LEGACY_DEFAULT_ACCENT_HUE = 250;
+const LEGACY_DEFAULT_ACCENT_CHROMA = 0.13;
+
 export const DEFAULT_DESIGN: DesignSettings = {
   funEnabled: false,
   funVariant: "aurora",
   fontFamily: "system",
   fontScale: 1,
-  accentHue: 250,
-  accentChroma: 0.13,
+  accentHue: OBSIDIAN_PURPLE_ACCENT_HUE,
+  accentChroma: OBSIDIAN_PURPLE_ACCENT_CHROMA,
   borderRadius: "rounded",
   spacingScale: "comfortable",
   shadowIntensity: "medium",
   toolbarDropdown: false,
 };
+
+/* Backfills visual settings and moves the previous blue default to purple. */
+export function normalizeDesignSettings(raw?: Partial<DesignSettings> | null): DesignSettings {
+  const design = { ...DEFAULT_DESIGN, ...(raw ?? {}) };
+
+  if (raw?.accentHue === LEGACY_DEFAULT_ACCENT_HUE && raw?.accentChroma === LEGACY_DEFAULT_ACCENT_CHROMA) {
+    design.accentHue = OBSIDIAN_PURPLE_ACCENT_HUE;
+    design.accentChroma = OBSIDIAN_PURPLE_ACCENT_CHROMA;
+  }
+
+  return design;
+}
 
 export interface Settings extends CoreSettings {
   design: DesignSettings;
@@ -120,6 +138,7 @@ export function normalizeSettings(raw: Partial<Settings>): Settings {
     engine: raw.engine ?? "claude",
     cleanupModel: raw.cleanupModel ?? DEFAULT_CLEANUP_MODEL,
     ...engineSettings,
+    tuiShortcutsVisible: raw.tuiShortcutsVisible ?? true,
     humanize: raw.humanize ?? true,
     rag: raw.rag ?? false,
     maxTurns: raw.maxTurns ?? 24,
@@ -137,7 +156,7 @@ export function normalizeSettings(raw: Partial<Settings>): Settings {
     onboarded: raw.onboarded ?? false,
     vaultDir: raw.vaultDir ?? "",
     extraDirs: Array.isArray(raw.extraDirs) ? raw.extraDirs : [],
-    design: raw.design ?? DEFAULT_DESIGN,
+    design: normalizeDesignSettings(raw.design),
     urlFetchMethod: toUrlFetchMethod(raw.urlFetchMethod),
     webResearchEnabled: raw.webResearchEnabled ?? false,
     searxngUrl: typeof raw.searxngUrl === "string" ? raw.searxngUrl : "http://127.0.0.1:8080",
@@ -258,7 +277,7 @@ const FILLERS = /^(please\s+|can you\s+|could you\s+|in (a|one)[^,]*,\s*|tell us
 
 const COMPANY_STOP = new Set(["we", "the", "our", "you", "your", "this", "that", "a", "an", "i", "it", "they"]);
 
-// Pull a likely company name out of the job description, fully offline.
+// Pull a likely organization name out of the draft context, fully offline.
 /* Attempts to extract a company name for a more descriptive local tab title. */
 function extractCompany(jobDescription: string): string {
   const text = jobDescription.replace(/\s+/g, " ").trim();
@@ -307,11 +326,57 @@ export function uid(): string {
   return crypto.randomUUID();
 }
 
+/* Derives a descriptive title from active context (file/folder/vault) if available. */
+export function deriveContextName(vaultDir?: string, activeTab?: Tab): string | null {
+  if (activeTab) {
+    if (activeTab.writePath) {
+      let rel = activeTab.writePath.trim();
+      if (vaultDir) {
+        const normalizedVault = vaultDir.replace(/[/\\]+$/, "");
+        if (rel.startsWith(normalizedVault)) {
+          rel = rel.slice(normalizedVault.length).replace(/^[/\\]+/, "");
+        }
+      }
+      if (rel) {
+        const lastSegment = rel.split(/[/\\]/).pop() || "";
+        if (lastSegment.includes(".")) {
+          return `Context: ${lastSegment}`;
+        } else {
+          const folder = rel.replace(/[/\\]+$/, "").split(/[/\\]/).pop() || rel;
+          return `Folder: ${folder}/`;
+        }
+      }
+    }
+    if (activeTab.docAttachment) {
+      return `File: ${activeTab.docAttachment.name}`;
+    }
+    if (activeTab.attachments && activeTab.attachments.length > 0) {
+      return `File: ${activeTab.attachments[0].name}`;
+    }
+  }
+
+  if (vaultDir) {
+    const segment = vaultDir.replace(/[/\\]+$/, "").split(/[/\\]/).pop();
+    if (segment) {
+      return `Vault: ${segment}`;
+    }
+  }
+
+  return null;
+}
+
 /* Creates a new tab with independent state and a balanced color assignment. */
-export function newTab(existing: Tab[] = [], ragDefault = false, mode: TabMode = "ask"): Tab {
+export function newTab(
+  existing: Tab[] = [],
+  ragDefault = false,
+  mode: TabMode = "ask",
+  vaultDir?: string,
+  activeTab?: Tab
+): Tab {
+  const contextName = deriveContextName(vaultDir, activeTab);
   return {
     id: uid(),
-    name: codename(),
+    name: contextName || codename(),
     color: pickColor(existing),
     autoNamed: true,
     mode,
@@ -344,7 +409,7 @@ export function newTab(existing: Tab[] = [], ragDefault = false, mode: TabMode =
   };
 }
 
-// A new conversation that reuses an existing tab's context (job description +
+// A new conversation that reuses an existing tab's draft context +
 // RAG/YC/override settings) but starts fresh: new id → new server session, blank
 // question, empty answer/messages, its own color and auto-name.
 /* Copies the job context into a clean tab for another related question. */
@@ -391,7 +456,7 @@ export function loadTabs(): Tab[] {
         rag: t.rag ?? false,
         // Migrate the old per-tab `yc` boolean into the general skills selection.
         skills: t.skills ?? ((t as any).yc ? ["yc-combinator"] : []),
-        // Tabs predating the rebrand: keep clearly job-application ones in Job
+        // Tabs predating the rebrand: keep clearly draft-oriented ones in Draft
         // mode, default everything else to the new Ask mode.
         mode: t.mode ?? (t.jobDescription || (t as any).yc ? "job" : "ask"),
         autoNamed: t.autoNamed ?? /^Tab \d+$/.test(t.name),
@@ -459,7 +524,7 @@ export function loadDesignSettings(): DesignSettings {
     const raw = localStorage.getItem(DESIGN_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<DesignSettings>;
-      return { ...DEFAULT_DESIGN, ...parsed };
+      return normalizeDesignSettings(parsed);
     }
   } catch {
     /* ignore */
@@ -478,7 +543,7 @@ export function saveDesignSettings(d: DesignSettings): void {
 
 // ── Quick notes ─────────────────────────────────────────────────────────────
 // A personal, copy-on-click scratchpad: reusable profile links, professional
-// references (real people), and labeled note boxes to paste into applications.
+// references (real people), and labeled note boxes for text the user reuses often.
 // Local-only.
 
 export interface QuickLink {

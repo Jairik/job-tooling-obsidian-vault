@@ -1,6 +1,6 @@
 // Quick Notes drawer: a local-only, copy-on-click scratchpad of reusable profile
-// links, professional references (real people), and labeled note boxes to paste
-// into applications. Persisted to localStorage via the store helpers.
+// links, professional references (real people), and labeled note boxes for text
+// the user reuses often. Persisted to localStorage via the store helpers.
 import { useEffect, useState, type ReactElement } from "react";
 import {
   loadQuickNotes,
@@ -202,7 +202,7 @@ export function QuickNotes({ onClose }: Props) {
               </div>
             ))}
             {qn.links.length === 0 && (
-              <div className="notice small">No links yet — add one to keep your profile URLs handy.</div>
+              <div className="notice small">No links yet. Add one to keep your frequently used links handy.</div>
             )}
           </div>
         </section>
@@ -293,14 +293,14 @@ export function QuickNotes({ onClose }: Props) {
                 <textarea
                   rows={4}
                   value={box.value}
-                  placeholder="A cover-letter blurb, salary expectations, “why this company”…"
+                  placeholder="A reusable blurb, key ideas, or any text snippet you use frequently..."
                   onChange={(e) => patchBox(box.id, { value: e.target.value })}
                 />
               </div>
             ))}
             {qn.boxes.length === 0 && (
               <div className="notice small">
-                No boxes yet — add one to store a labeled snippet you reuse across applications.
+                No boxes yet. Add one to store a labeled snippet you reuse often.
               </div>
             )}
           </div>

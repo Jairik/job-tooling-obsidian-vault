@@ -10,18 +10,14 @@ import { tmpdir } from "os";
 import { join, extname } from "path";
 import { effectiveEngineModel, effectiveEngineReasoning, type Engine } from "../shared/settings";
 import { injectSkillsIntoPrompt, type ServerSettings, type SkillNote } from "./config";
+import { cliPathForEngine } from "./engine-scan";
 
 type Emit = (event: string, data: unknown) => void;
 
 /* Reports whether an engine is available on PATH; Claude is handled by its SDK. */
 export function cliAvailable(engine: Engine): boolean {
   if (engine === "claude") return true; // managed via SDK
-  if (engine === "gemini") return Boolean(Bun.which("agy"));
-  if (engine === "opencode") return Boolean(Bun.which("opencode"));
-  if (engine === "cursor") return Boolean(Bun.which("cursor-agent") || Bun.which("cursor"));
-  if (engine === "copilot") return Boolean(Bun.which("copilot"));
-  if (engine === "codex") return Boolean(Bun.which("codex"));
-  return false;
+  return Boolean(cliPathForEngine(engine));
 }
 
 /* Retains the Gemini-specific availability check used by older API callers. */
@@ -94,6 +90,7 @@ interface CliArgs {
   emit: Emit;
   abort: AbortController;
   settings?: ServerSettings;
+  resume?: string;
 }
 
 export interface CliCommand {
@@ -121,7 +118,7 @@ function tomlString(value: string): string {
  */
 export function buildCliCommand(
   engine: Engine,
-  args: { prompt: string; settings?: ServerSettings; skills?: SkillNote[] }
+  args: { prompt: string; settings?: ServerSettings; skills?: SkillNote[]; resume?: string }
 ): CliCommand {
   const model = args.settings ? effectiveEngineModel(args.settings, engine) : "";
   const reasoning = args.settings ? effectiveEngineReasoning(args.settings, engine) : "";
@@ -135,11 +132,13 @@ export function buildCliCommand(
   if (engine === "gemini") {
     bin = Bun.which("agy") ?? "agy";
     cmd = [bin, "-p", "--sandbox"];
+    if (args.resume) cmd.push("--conversation", args.resume);
     if (model) cmd.push("--model", model);
     writeToStdin = true;
   } else if (engine === "opencode") {
     bin = Bun.which("opencode") ?? "opencode";
-    cmd = [bin, "run", "--pure"];
+    cmd = [bin, "run", "--pure", "--format", "json"];
+    if (args.resume) cmd.push("--session", args.resume);
     if (model) cmd.push("--model", model);
     if (reasoning) cmd.push("--variant", reasoning);
     writeToStdin = true;
@@ -162,10 +161,16 @@ export function buildCliCommand(
     writeToStdin = true;
   } else if (engine === "codex") {
     bin = Bun.which("codex") ?? "codex";
-    cmd = [bin, "exec", "--sandbox", "read-only", "--skip-git-repo-check", "--color", "never", "--ephemeral"];
-    if (model) cmd.push("--model", model);
-    if (reasoning) cmd.push("--config", `model_reasoning_effort=${tomlString(reasoning)}`);
-    cmd.push("-");
+    if (args.resume) {
+      cmd = [bin, "exec", "resume", args.resume, "--json"];
+      if (model) cmd.push("--model", model);
+      cmd.push("-");
+    } else {
+      cmd = [bin, "exec", "--sandbox", "read-only", "--skip-git-repo-check", "--color", "never", "--json"];
+      if (model) cmd.push("--model", model);
+      if (reasoning) cmd.push("--config", `model_reasoning_effort=${tomlString(reasoning)}`);
+      cmd.push("-");
+    }
     writeToStdin = true;
   } else {
     throw new Error(`Unsupported CLI engine: ${engine}`);
@@ -212,13 +217,59 @@ export async function runCliTurn(engine: Engine, args: CliArgs): Promise<string>
     const errPromise = new Response(proc.stderr).text();
     const reader = proc.stdout.getReader();
     const decoder = new TextDecoder();
+    const isJsonFormat = engine === "opencode" || engine === "codex";
+    let buffer = "";
+
+    const processLine = (line: string) => {
+      if (!line.trim()) return;
+      try {
+        const ev = JSON.parse(line);
+        // Capture session ID
+        if (ev.sessionID) {
+          args.emit("session", { sessionId: ev.sessionID });
+        } else if (ev.type === "thread.started" && ev.thread_id) {
+          args.emit("session", { sessionId: ev.thread_id });
+        }
+
+        // Extract text delta
+        let delta = "";
+        if (ev.type === "text" && ev.part?.text) {
+          delta = ev.part.text;
+        } else if (ev.type === "item.delta" && ev.delta?.text) {
+          delta = ev.delta.text;
+        } else if (ev.type === "item.completed" && ev.item?.type === "agent_message" && ev.item?.text) {
+          delta = ev.item.text;
+        }
+        if (delta) {
+          text += delta;
+          if (!args.suppressText) args.emit("text", { phase: args.phase, delta });
+        }
+      } catch {
+        // If not valid JSON, treat as raw text or ignore if it's junk/logs
+      }
+    };
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       const chunk = decoder.decode(value, { stream: true });
-      text += chunk;
-      if (!args.suppressText) args.emit("text", { phase: args.phase, delta: chunk });
+      if (isJsonFormat) {
+        buffer += chunk;
+        let idx: number;
+        while ((idx = buffer.indexOf("\n")) !== -1) {
+          const line = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 1);
+          processLine(line);
+        }
+      } else {
+        text += chunk;
+        if (!args.suppressText) args.emit("text", { phase: args.phase, delta: chunk });
+      }
     }
+    if (isJsonFormat && buffer) {
+      processLine(buffer);
+    }
+
     const code = await proc.exited;
     if (code !== 0 && !args.abort.signal.aborted) {
       const err = (await errPromise).trim();

@@ -10,6 +10,7 @@ const PHASE_LABEL: Record<Phase, string> = {
   humanize: "Humanizing…",
   cleanup: "Cleaning up…",
   followup: "Revising…",
+  render: "Rendering…",
   done: "Ready",
   error: "Error",
 };
@@ -38,7 +39,7 @@ export function StatusBar({ phase, hint, notice, error }: Props) {
           <Text color={phase === "error" ? "red" : "green"}>{PHASE_LABEL[phase]}</Text>
         )}
       </Box>
-      <Text dimColor>{hint}</Text>
+      {hint ? <Text dimColor>{hint}</Text> : null}
     </Box>
   );
 }

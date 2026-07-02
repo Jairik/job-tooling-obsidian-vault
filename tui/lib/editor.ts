@@ -1,7 +1,6 @@
-// Escape hatch for editing long text (job descriptions, manual vault content,
-// personas) in $EDITOR, like `git commit`. Bun.spawnSync blocks the event loop, so
-// Ink's input handler stays quiet while the editor owns the terminal; the caller
-// toggles raw mode around it so the editor receives keystrokes cleanly.
+// Escape hatch for editing long text (draft context, manual vault content,
+// personas) in $EDITOR, like `git commit`. When Ink can suspend the terminal, the
+// editor gets a clean stdio handoff and Ink redraws after it exits.
 import { tmpdir } from "os";
 import { join } from "path";
 import { rm } from "fs/promises";
@@ -9,6 +8,7 @@ import { rm } from "fs/promises";
 interface EditOptions {
   ext?: string;
   setRawMode?: (mode: boolean) => void;
+  suspendTerminal?: (callback: () => void | Promise<void>) => Promise<void>;
 }
 
 /* Opens $EDITOR on the given text and returns the edited contents. */
@@ -18,15 +18,23 @@ export async function editInEditor(initial: string, opts: EditOptions = {}): Pro
   await Bun.write(tmp, initial);
 
   const [cmd, ...args] = editor.split(/\s+/).filter(Boolean);
-  opts.setRawMode?.(false);
-  try {
+  const runEditor = () => {
     Bun.spawnSync([cmd, ...args, tmp], {
       stdin: "inherit",
       stdout: "inherit",
       stderr: "inherit",
     });
-  } finally {
-    opts.setRawMode?.(true);
+  };
+
+  if (opts.suspendTerminal) {
+    await opts.suspendTerminal(runEditor);
+  } else {
+    opts.setRawMode?.(false);
+    try {
+      runEditor();
+    } finally {
+      opts.setRawMode?.(true);
+    }
   }
 
   const text = await Bun.file(tmp).text();

@@ -1,7 +1,7 @@
 // Shared, user-facing help & walkthrough content. It is rendered in two places
 // that both scroll and stack their children with a gap: the Settings → Help page
 // (inside .s-body / .s-page) and, on first run, a standalone welcome modal
-// (inside .onboard-body). Presentational only — no state, no side effects.
+// (inside .onboard-body). Presentational only, with no state or side effects.
 import type { ReactNode } from "react";
 
 interface ModeCard {
@@ -28,12 +28,12 @@ const MODES: ModeCard[] = [
     badge: "Draft",
     title: "Drafting mode",
     blurb:
-      "The job / application workflow. Add an optional job description plus a specific prompt and get a first-person answer written in your voice.",
+      "Use Drafting mode when you want a first-person answer shaped by extra context. Add background, ask a specific question, and get a draft in your voice.",
     steps: [
-      "Optionally paste a job description for context.",
-      "Ask your question, e.g. \"Why are you a fit for this role?\"",
+      "Paste any context that should shape the draft.",
+      "Ask the specific question you want answered.",
       "If Humanize is on, it rewrites the draft to sound natural.",
-      "Refine with follow-ups, or use \"+ New question\" to reuse the same job.",
+      "Refine with follow-ups, or use \"+ New question\" to reuse the same context.",
     ],
   },
   {
@@ -81,10 +81,10 @@ const TOPICS: Topic[] = [
     title: "AI engine & model",
     body: (
       <>
-        Under <strong>Settings → AI Engine</strong>, pick which engine responds: Claude
-        (built in) or a CLI engine you've installed (Gemini, OpenCode, Cursor, Copilot,
-        Codex). Set the model and reasoning effort there too. A dot shows whether the
-        selected CLI is on your <code>PATH</code>.
+        Under <strong>Settings -&gt; AI Engine</strong>, choose Claude or an installed CLI
+        engine: Gemini, OpenCode, Cursor, Copilot, or Codex. Set the model and reasoning
+        effort there too. The status dot shows whether the selected CLI is on your
+        <code> PATH</code>.
       </>
     ),
   },
@@ -93,9 +93,9 @@ const TOPICS: Topic[] = [
     title: "Your voice (persona)",
     body: (
       <>
-        <strong>Settings → Persona</strong> holds the system prompt that goes into every
-        generation. Fill in your name, role, and voice notes and regenerate it, or edit
-        the prompt by hand so answers sound like you.
+        <strong>Settings -&gt; Persona</strong> stores the system prompts used for each
+        answer mode. Fill in your name, role, and voice notes to regenerate them, or
+        edit either prompt by hand so answers sound like you.
       </>
     ),
   },
@@ -104,10 +104,10 @@ const TOPICS: Topic[] = [
     title: "RAG / retrieval",
     body: (
       <>
-        Turn on <strong>Settings → RAG / Retrieval</strong> to send only the most
-        relevant passages from your vault instead of the whole thing. That means fewer
-        tokens and tighter answers. Leave it off to let the assistant browse the vault
-        freely.
+        Turn on <strong>Settings -&gt; RAG / Retrieval</strong> to send the model only the
+        most relevant vault passages instead of the whole vault. That uses fewer tokens
+        and usually keeps answers tighter. Leave it off when you want the assistant to
+        browse the vault freely.
       </>
     ),
   },
@@ -116,10 +116,10 @@ const TOPICS: Topic[] = [
     title: "Skills",
     body: (
       <>
-        <strong>Settings → Skills</strong> toggles built-in skills like <em>Humanize</em>
-        {" "}(de-AI rewrite, on by default) and <em>Web-search research</em>. It also lists
-        your own skills from <code>~/.claude/skills</code> and lets you create new ones in
-        plain language.
+        <strong>Settings -&gt; Skills</strong> toggles built-in skills like <em>Humanize</em>
+        {" "}(on by default) and <em>Web-search research</em>. It also lists your own
+        skills from <code>~/.claude/skills</code> and lets you create new ones in plain
+        language.
       </>
     ),
   },
@@ -138,9 +138,9 @@ const TOPICS: Topic[] = [
     title: "Keyboard shortcuts",
     body: (
       <>
-        The app is keyboard-friendly: press <kbd className="kbd">Enter</kbd> to send a
-        question, <kbd className="kbd">Ctrl</kbd>+<kbd className="kbd">/</kbd> to pick
-        skills, and <kbd className="kbd">Ctrl</kbd>+<kbd className="kbd">,</kbd> for
+        The app works well from the keyboard: press <kbd className="kbd">Enter</kbd> to
+        send a question, <kbd className="kbd">Ctrl</kbd>+<kbd className="kbd">/</kbd> to
+        pick skills, and <kbd className="kbd">Ctrl</kbd>+<kbd className="kbd">,</kbd> for
         settings. Press <kbd className="kbd">?</kbd> anytime to see the full list.
       </>
     ),
@@ -156,9 +156,9 @@ export function HelpGuide({ showIntro = true }: { showIntro?: boolean }) {
           <p className="help-intro">
             Vault Assistant connects your knowledge vault (an Obsidian folder, or any
             directory of markdown files) to an AI engine. Use it to ask grounded
-            questions, draft applications, and write new notes back into the vault. The
-            app runs locally. Only your prompt and the excerpts it pulls from your vault
-            go to the model provider you pick.
+            questions, draft polished answers, and write new notes back into the vault.
+            The app runs locally. Only your prompt and the excerpts it pulls from your
+            vault go to the model provider you choose.
           </p>
         </div>
       )}
@@ -202,10 +202,10 @@ export function HelpGuide({ showIntro = true }: { showIntro?: boolean }) {
       <div className="s-section">
         <span className="s-section-lbl">First steps</span>
         <ul className="help-steps help-steps-lg">
-          <li>Point the assistant at your vault under <strong>Settings → Vault</strong>.</li>
-          <li>Set your name, role, and voice under <strong>Settings → Persona</strong>.</li>
+          <li>Point the assistant at your vault under <strong>Settings -&gt; Vault</strong>.</li>
+          <li>Set your name, role, and voice under <strong>Settings -&gt; Persona</strong>.</li>
           <li>Open a tab in <strong>Ask</strong> mode and ask something about your notes.</li>
-          <li>Reopen this guide anytime from <strong>Settings → Help</strong>.</li>
+          <li>Reopen this guide anytime from <strong>Settings -&gt; Help</strong>.</li>
         </ul>
       </div>
     </>

@@ -1,9 +1,12 @@
-// Write to Vault. Three sub-modes (switched via the global mode cycle, Ctrl+T):
+// Write to Vault. Four sub-modes (cycled with Ctrl+T; the global Shift+Tab switches
+// between Ask/Draft/Write):
 //   summarize — condense pasted text / a URL into a markdown note, then save
 //   manual    — write a note by hand, optionally format or auto-place it, then save
 //   fillin    — scan the vault for gaps, draft answers, and write each one
+//   document  — upload an extracted PDF/DOCX and review proposed vault writes
 // Nothing touches disk until an explicit write (Ctrl+W / Enter on a path).
-import { Box, Text, useInput } from "ink";
+import { Box, Text, useApp, useInput, useStdin } from "ink";
+import { editInEditor } from "../lib/editor";
 import { MultilineInput } from "./MultilineInput";
 import { PathPicker } from "./PathPicker";
 import { AnswerPane } from "./AnswerPane";
@@ -11,6 +14,12 @@ import { ActivityLog } from "./ActivityLog";
 import { isRunning, type Session } from "../lib/session";
 import type { Actions } from "../lib/actions";
 import type { ServerSettings } from "../lib/api";
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
 
 interface Props {
   session: Session;
@@ -21,6 +30,7 @@ interface Props {
   active: boolean;
   width: number;
   previewHeight: number;
+  showShortcuts?: boolean;
   openEditor: () => void;
 }
 
@@ -33,10 +43,13 @@ export function WriteView({
   active,
   width,
   previewHeight,
+  showShortcuts = true,
   openEditor,
 }: Props) {
   const running = isRunning(session.phase);
   const mode = session.writeMode;
+  const { suspendTerminal } = useApp();
+  const { setRawMode } = useStdin();
 
   // View-level action keys (Ctrl-combos don't collide with text input).
   useInput(
@@ -53,6 +66,10 @@ export function WriteView({
       } else if (mode === "fillin") {
         if (input === "d" && !running) actions.runFillinScan(session);
         if (input === "w" && focusId.startsWith("q:")) actions.confirmFillinWrite(session, focusId.slice(2));
+      } else if (mode === "document") {
+        if (input === "d" && session.docAttachment && !running) actions.runDocPropose(session);
+        if (input === "w" && focusId.startsWith("p:")) actions.confirmDocWrite(session, focusId.slice(2));
+        if (input === "x" && focusId.startsWith("p:")) actions.dismissDocProposal(session, focusId.slice(2));
       }
     },
     { isActive: active }
@@ -67,7 +84,7 @@ export function WriteView({
       {mode === "summarize" ? (
         <Box flexDirection="column">
           <Text bold>
-            Source content or URL <Text dimColor>(Ctrl+O editor · Ctrl+D summarize)</Text>
+            Source content or URL {showShortcuts ? <Text dimColor>(Ctrl+O editor · Ctrl+D summarize)</Text> : null}
           </Text>
           <MultilineInput
             value={session.writeInput}
@@ -86,9 +103,10 @@ export function WriteView({
                 height={previewHeight}
                 label="Summary preview"
                 streaming={running}
+                showShortcuts={showShortcuts}
               />
               <Text bold>
-                Save path <Text dimColor>(→ complete dir · Enter / Ctrl+W to write)</Text>
+                Save path {showShortcuts ? <Text dimColor>(→ complete dir · Enter / Ctrl+W to write)</Text> : null}
               </Text>
               <PathPicker
                 vaultDir={settings.vaultDir}
@@ -97,6 +115,7 @@ export function WriteView({
                 onSubmit={() => actions.confirmWrite(session)}
                 focus={focusId === "wpath"}
                 placeholder="e.g. Topics/summary.md"
+                showShortcuts={showShortcuts}
               />
             </Box>
           ) : null}
@@ -106,7 +125,7 @@ export function WriteView({
       {mode === "manual" ? (
         <Box flexDirection="column">
           <Text bold>
-            Target path <Text dimColor>(Enter / Ctrl+W to write)</Text>
+            Target path {showShortcuts ? <Text dimColor>(Enter / Ctrl+W to write)</Text> : null}
           </Text>
           <PathPicker
             vaultDir={settings.vaultDir}
@@ -115,9 +134,10 @@ export function WriteView({
             onSubmit={() => actions.confirmWrite(session)}
             focus={focusId === "wpath"}
             placeholder="e.g. Projects/new-project.md"
+            showShortcuts={showShortcuts}
           />
           <Text bold>
-            Content <Text dimColor>(Ctrl+O editor · Ctrl+F format · Ctrl+P auto-place · Ctrl+W write)</Text>
+            Content {showShortcuts ? <Text dimColor>(Ctrl+O editor · Ctrl+F format · Ctrl+P auto-place · Ctrl+W write)</Text> : null}
           </Text>
           <MultilineInput
             value={session.writeInput}
@@ -134,8 +154,9 @@ export function WriteView({
                 text={session.writePreview}
                 width={width}
                 height={previewHeight}
-                label="Formatted preview (Ctrl+U to use as content)"
+                label={showShortcuts ? "Formatted preview (Ctrl+U to use as content)" : "Formatted preview"}
                 streaming={running}
+                showShortcuts={showShortcuts}
               />
             </Box>
           ) : null}
@@ -145,7 +166,7 @@ export function WriteView({
       {mode === "fillin" ? (
         <Box flexDirection="column">
           <Text bold>
-            Focus area <Text dimColor>(optional · Enter or Ctrl+D to scan)</Text>
+            Focus area {showShortcuts ? <Text dimColor>(optional · Enter or Ctrl+D to scan)</Text> : null}
           </Text>
           <MultilineInput
             value={session.writeInput}
@@ -154,6 +175,7 @@ export function WriteView({
             focus={focusId === "wfocus"}
             maxRows={2}
             placeholder="What area should I look for gaps in?"
+            onEditor={openEditor}
           />
           <Text bold>
             Directory scope <Text dimColor>(optional)</Text>
@@ -165,6 +187,7 @@ export function WriteView({
             onSubmit={() => actions.runFillinScan(session)}
             focus={focusId === "wdir"}
             placeholder="Entire vault"
+            showShortcuts={showShortcuts}
           />
           {session.fillinQuestions.length > 0 ? (
             <Box flexDirection="column" marginTop={1}>
@@ -197,13 +220,90 @@ export function WriteView({
                         focus={isFocused}
                         maxRows={3}
                         placeholder="Type your answer, then Enter to draft…"
+                        onEditor={async () => {
+                          const next = await editInEditor(q.answer, { setRawMode, suspendTerminal });
+                          patch({
+                            fillinQuestions: session.fillinQuestions.map((x) =>
+                              x.id === q.id ? { ...x, answer: next } : x
+                            ),
+                          });
+                        }}
                       />
                     ) : null}
                     {q.preview && !q.written ? (
                       <Box flexDirection="column">
-                        <Text dimColor>Draft preview (Ctrl+W to write):</Text>
+                        <Text dimColor>{showShortcuts ? "Draft preview (Ctrl+W to write):" : "Draft preview:"}</Text>
                         <Text wrap="truncate-end">{q.preview.split("\n").slice(0, 4).join("  ")}</Text>
                       </Box>
+                    ) : null}
+                  </Box>
+                );
+              })}
+            </Box>
+          ) : null}
+        </Box>
+      ) : null}
+
+      {mode === "document" ? (
+        <Box flexDirection="column">
+          <Text bold>
+            Document path {showShortcuts ? <Text dimColor>(PDF/DOCX · Enter upload · Ctrl+D analyze)</Text> : null}
+          </Text>
+          <MultilineInput
+            value={session.docUploadPath}
+            onChange={(v) => patch({ docUploadPath: v })}
+            onSubmit={() => actions.attachDocDocument(session, session.docUploadPath)}
+            focus={focusId === "docpath"}
+            maxRows={2}
+            placeholder="/absolute/path/to/document.pdf"
+          />
+          {session.docAttachment ? (
+            <Box paddingX={1}>
+              <Text color={session.docAttachment.expired ? "red" : "green"}>
+                {session.docAttachment.name} · {formatSize(session.docAttachment.size)} ·{" "}
+                {session.docAttachment.chars.toLocaleString()} chars
+                {session.docAttachment.truncated ? " · truncated" : ""}
+              </Text>
+            </Box>
+          ) : null}
+          <Text bold>
+            Focus <Text dimColor>(optional)</Text>
+          </Text>
+          <MultilineInput
+            value={session.writeInput}
+            onChange={(v) => patch({ writeInput: v })}
+            onSubmit={() => actions.runDocPropose(session)}
+            focus={focusId === "docfocus"}
+            maxRows={3}
+            placeholder="What should I focus on when placing this document?"
+            onEditor={openEditor}
+          />
+
+          {session.docProposals.length > 0 ? (
+            <Box flexDirection="column" marginTop={1}>
+              {session.docProposals.map((p) => {
+                const isFocused = focusId === `p:${p.id}`;
+                return (
+                  <Box
+                    key={p.id}
+                    flexDirection="column"
+                    borderStyle="round"
+                    borderColor={isFocused ? "cyan" : p.status === "written" ? "green" : p.status === "rejected" ? "gray" : "yellow"}
+                    paddingX={1}
+                  >
+                    <Text>
+                      <Text color={p.status === "written" ? "green" : p.status === "rejected" ? "gray" : "yellow"}>
+                        {p.status === "written" ? "✓ " : p.status === "rejected" ? "× " : "• "}
+                      </Text>
+                      <Text color="cyan">{p.action}</Text> {p.targetPath}
+                      <Text dimColor>{`  ${p.status}`}</Text>
+                    </Text>
+                    {p.rationale ? <Text dimColor>{p.rationale}</Text> : null}
+                    {p.status === "pending" ? (
+                      <>
+                        <Text wrap="truncate-end">{p.content.split("\n").slice(0, 5).join("  ")}</Text>
+                        {showShortcuts ? <Text dimColor>Ctrl+W review/write · Ctrl+X dismiss</Text> : null}
+                      </>
                     ) : null}
                   </Box>
                 );

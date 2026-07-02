@@ -7,6 +7,9 @@
 import { join } from "path";
 import { tmpdir } from "os";
 import { mkdtemp, rm } from "fs/promises";
+// Embedded at build time so the template survives `bun build --compile` (where
+// import.meta.dir points at the virtual bundle root, not a readable directory).
+import documentTemplate from "./templates/document.tex" with { type: "text" };
 
 const COMPILE_TIMEOUT_MS = 180_000; // generous: first run downloads TeX packages
 const REGISTRY_MAX_AGE_MS = 12 * 60 * 60 * 1000;
@@ -32,7 +35,7 @@ export function tectonicInstallHint(): string {
 
 /* Loads the predefined LaTeX template handed to the model in latex mode. */
 export async function loadLatexTemplate(): Promise<string> {
-  return (await Bun.file(join(import.meta.dir, "templates", "document.tex")).text()).trim();
+  return documentTemplate.trim();
 }
 
 // Models often wrap file contents in markdown fences despite instructions; strip

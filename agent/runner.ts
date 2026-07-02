@@ -38,11 +38,12 @@ import {
   type SkillNote,
 } from "./config";
 import { compileLatex, loadLatexTemplate, stripTexFences, tectonicAvailable, tectonicInstallHint } from "./latex";
-import { DEFAULT_CLAUDE_MODEL, DEFAULT_CLEANUP_MODEL, effectiveEngineModel, type TabMode } from "../shared/settings";
+import { DEFAULT_CLAUDE_MODEL, cleanupEngineSettings, effectiveEngineModel, type TabMode } from "../shared/settings";
 import type { ServerSettings } from "./config";
 import { detectSkills, loadSelectedSkills, loadSkillCreatorGuide, parseGeneratedSkill } from "./skills";
-import { cliAvailable, runCliTurn, gatherVaultContext } from "./gemini";
+import { cliAvailable, runCliTurn, gatherVaultContext } from "./cli-engines";
 import { retrieveContext } from "./rag";
+import { dataDir } from "./paths";
 import {
   buildWebResearchSkill,
   formatWebToolResult,
@@ -66,7 +67,7 @@ interface TabSession {
 }
 
 const sessions = new Map<string, TabSession>();
-const SESS_PATH = join(import.meta.dir, "..", ".sessions.json");
+const SESS_PATH = join(dataDir(), ".sessions.json");
 
 /* Restores per-tab Claude session identifiers after a server restart. */
 export async function loadSessions(): Promise<void> {
@@ -275,7 +276,7 @@ async function runWithWebResearch(args: WebResearchLoopArgs): Promise<WebTurnRes
   return last;
 }
 
-/* Runs one stateless external CLI turn with the portable web research protocol. */
+/* Runs one external CLI turn with the portable web research protocol while supporting session resumption. */
 async function runCliAgentTurn(
   engine: ServerSettings["engine"],
   args: {
@@ -285,19 +286,35 @@ async function runCliAgentTurn(
     emit: Emit;
     abort: AbortController;
     settings: ServerSettings;
+    resume?: string;
   }
-): Promise<string> {
-  const result = await runWithWebResearch({
+): Promise<WebTurnResult> {
+  let resume = args.resume;
+  return runWithWebResearch({
     task: args.prompt,
     settings: args.settings,
     phase: args.phase,
     emit: args.emit,
     abort: args.abort,
-    execute: async (prompt, suppressText) => ({
-      text: await runCliTurn(engine, { ...args, prompt, suppressText }),
-    }),
+    execute: async (prompt, suppressText) => {
+      let turnSessionId = resume;
+      const interceptEmit = (event: string, data: any) => {
+        if (event === "session") {
+          turnSessionId = data.sessionId;
+        }
+        args.emit(event, data);
+      };
+      const text = await runCliTurn(engine, {
+        ...args,
+        prompt,
+        suppressText,
+        resume,
+        emit: interceptEmit,
+      });
+      resume = turnSessionId ?? resume;
+      return { text, sessionId: resume };
+    },
   });
-  return result.text;
 }
 
 /* Runs a Claude SDK turn with the same protocol while preserving its session id. */
@@ -328,13 +345,7 @@ function withSkillTool(tools: string[] | undefined, hasSkills: boolean): string[
 
 /* Derives the lightweight settings used for cleanup-grade model turns. */
 function cleanupModelSettings(settings: ServerSettings): ServerSettings {
-  return {
-    ...settings,
-    model: settings.cleanupModel || DEFAULT_CLEANUP_MODEL,
-    effort: "low",
-    engineModels: { ...(settings.engineModels ?? {}), claude: settings.cleanupModel || DEFAULT_CLEANUP_MODEL },
-    engineReasoning: { ...(settings.engineReasoning ?? {}), claude: "low" },
-  };
+  return cleanupEngineSettings(settings);
 }
 
 // Compile the model's LaTeX output and report the result over SSE. On a failed
@@ -360,17 +371,34 @@ async function finishLatex(
   if (!result.ok && !abort.signal.aborted) {
     emit("notice", { message: "LaTeX compilation failed — attempting an automatic fix." });
     try {
-      const fixed = await runTurn({
-        prompt: buildLatexFixPrompt(tex, result.log),
-        settings: cleanupModelSettings(settings),
-        append: "You fix LaTeX compilation errors. Return only the complete corrected document.",
-        allowedTools: RAG_TOOLS,
-        phase: "render",
-        emit,
-        abort,
-        suppressText: true,
-      });
-      const fixedTex = stripTexFences(fixed.text);
+      const cleanupSettings = cleanupModelSettings(settings);
+      const fixPrompt = buildLatexFixPrompt(tex, result.log);
+      const fixAppend = "You fix LaTeX compilation errors. Return only the complete corrected document.";
+      const fixedText =
+        cleanupSettings.engine === "claude"
+          ? (
+              await runTurn({
+                prompt: fixPrompt,
+                settings: cleanupSettings,
+                append: fixAppend,
+                allowedTools: RAG_TOOLS,
+                phase: "render",
+                emit,
+                abort,
+                suppressText: true,
+              })
+            ).text
+          : cliAvailable(cleanupSettings.engine)
+            ? await runCliTurn(cleanupSettings.engine, {
+                prompt: `${fixAppend}\n\nTASK\n${fixPrompt}`,
+                phase: "render",
+                emit,
+                abort,
+                settings: cleanupSettings,
+                suppressText: true,
+              })
+            : "";
+      const fixedTex = stripTexFences(fixedText);
       if (fixedTex) {
         const retry = await compileLatex(fixedTex);
         if (retry.ok) {
@@ -461,14 +489,17 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
       }
       let context = ragContext;
       if (!context) context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
-      finalText = await runCliAgentTurn(args.settings.engine, {
+      const ans = await runCliAgentTurn(args.settings.engine, {
         prompt: cliLatexPrefix + buildCliAskPrompt(args.settings.askPersona, context, args.question),
         skills: skillNotes,
         phase: "draft",
         emit,
         abort,
         settings: args.settings,
+        resume: args.settings.engine === "gemini" ? tabId : undefined,
       });
+      finalText = ans.text;
+      finalSession = ans.sessionId;
     } else {
       const ans = await runClaudeAgentTurn({
         prompt: useRag ? buildRagAskPrompt(ragContext, args.question) : buildAskPrompt(args.question),
@@ -536,14 +567,17 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
     if (args.rag) context = await retrieveForQuery(args.settings, ragQuery, emit);
     if (!context) context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
     emit("phase", { phase: "draft" });
-    const draft = await runCliAgentTurn(args.settings.engine, {
+    const ans = await runCliAgentTurn(args.settings.engine, {
       prompt: cliLatexPrefix + buildCliDraftPrompt(args.settings.persona, context, args.jobDescription, args.question, additional),
       skills: skillNotes,
       phase: "draft",
       emit,
       abort,
       settings: args.settings,
+      resume: args.settings.engine === "gemini" ? tabId : undefined,
     });
+    const draft = ans.text;
+    finalSession = ans.sessionId;
     emit("draft", { text: draft });
     finalText = draft;
 
@@ -556,6 +590,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
         emit,
         abort,
         settings: args.settings,
+        resume: finalSession,
       });
       if (hum) finalText = hum;
     }
@@ -652,15 +687,28 @@ export async function followUp(tabId: string, args: FollowUpArgs, emit: Emit): P
     let context = "";
     if (args.rag) context = await retrieveForQuery(args.settings, args.text, emit);
     if (!context) context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
-    const cliPrompt = buildCliFollowupPrompt(persona, context, prev?.lastAnswer ?? "", args.text);
-    finalText = await runCliAgentTurn(args.settings.engine, {
+
+    const isStatefulEngine = args.settings.engine === "gemini" || args.settings.engine === "opencode" || args.settings.engine === "codex";
+    const canResume = isStatefulEngine && Boolean(prev?.sessionId || (args.settings.engine === "gemini" ? tabId : undefined));
+
+    let cliPrompt = "";
+    if (canResume) {
+      cliPrompt = args.text;
+    } else {
+      cliPrompt = buildCliFollowupPrompt(persona, context, prev?.lastAnswer ?? "", args.text);
+    }
+
+    const ans = await runCliAgentTurn(args.settings.engine, {
       prompt: latexAppend ? `${latexAppend}\n\n${cliPrompt}` : cliPrompt,
       skills: skillNotes,
       phase: "followup",
       emit,
       abort,
       settings: args.settings,
+      resume: prev?.sessionId || (args.settings.engine === "gemini" ? tabId : undefined),
     });
+    finalText = ans.text;
+    finalSession = ans.sessionId;
   } else {
     // With RAG on, refresh excerpts for the tweak and keep file-browsing disabled.
     let ragContext = "";
@@ -720,6 +768,7 @@ export async function cleanup(tabId: string, args: CleanupArgs, emit: Emit): Pro
   const skills = await detectSkills(args.settings.vaultDir);
   const skillNotes = await resolveSkillNotes(args.settings, args.skills, emit);
   const defaultSystemPrompt = resolveDefaultSystemPrompt(args.settings);
+  const cleanupSettings = cleanupModelSettings(args.settings);
   let cleaned = text;
 
   if (isCliEngine) {
@@ -735,18 +784,18 @@ export async function cleanup(tabId: string, args: CleanupArgs, emit: Emit): Pro
       phase: "cleanup",
       emit,
       abort,
-      settings: args.settings,
+      settings: cleanupSettings,
     });
     if (out) cleaned = out;
   } else {
-    // Lightweight: cleanup model + low reasoning, Skill tool only (no file browsing).
+    // Lightweight: cleanup model + cleanup reasoning, Skill tool only (no file browsing).
     const note = buildSkillsNote(skillNotes);
     const baseAppend = args.latex
       ? `${defaultSystemPrompt}\n\nCLEANUP PASS (LATEX)\n- Fix grammar and wording in the document's prose only. Keep the document compilable and return ONLY the complete .tex document: no commentary, no fences.`
       : buildCleanupAppend(defaultSystemPrompt, skills.humanizer);
     const r = await runTurn({
       prompt: args.latex ? buildLatexCleanupPrompt(text) : buildCleanupPrompt(text, skills.humanizer),
-      settings: cleanupModelSettings(args.settings),
+      settings: cleanupSettings,
       append: note ? `${baseAppend}\n\n${note}` : baseAppend,
       allowedTools: RAG_TOOLS,
       phase: "cleanup",
@@ -1022,9 +1071,10 @@ export async function writeCleanup(tabId: string, args: WriteCleanupArgs, emit: 
   emit("phase", { phase: "cleanup" });
 
   const skillNotes = await resolveSkillNotes(args.settings, args.skills, emit);
+  const cleanupSettings = cleanupModelSettings(args.settings);
   const output = await runWriterTurn({
-    settings: args.settings,
-    claudeSettings: cleanupModelSettings(args.settings),
+    settings: cleanupSettings,
+    claudeSettings: cleanupSettings,
     prompt: buildWriteCleanupPrompt(args.text),
     skills: skillNotes,
     append: buildWriterAppend(args.settings, "Clean up and format the text into well-structured markdown."),

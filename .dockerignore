@@ -1,0 +1,11 @@
+.git
+.agents
+.codex
+node_modules
+.attachments
+logs
+config.json
+.sessions.json
+.env
+*.log
+**skills-lock.json

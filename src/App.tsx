@@ -33,6 +33,7 @@ import {
   type AttachmentMeta,
 } from "./lib/store";
 import { effectiveEngineModel, effectiveEngineReasoning } from "../shared/settings";
+import type { EngineScanResult } from "../shared/engine-scan";
 import { api, streamPost, type ModelOption, type SSEHandlers } from "./lib/api";
 import { TabBar } from "./components/TabBar";
 import { TabView } from "./components/TabView";
@@ -45,6 +46,11 @@ import { FunBackground } from "./components/FunBackground";
 import { ShortcutsOverlay } from "./components/ShortcutsOverlay";
 import { isEditableTarget } from "./lib/shortcuts";
 import { createConversationActions } from "./lib/conversation-actions";
+import logoUrl from "./assets/vault-assistant-logo-v2.png";
+
+const logoSrc = (typeof logoUrl === "string" && logoUrl.startsWith("/") && !logoUrl.startsWith("/assets/"))
+  ? "/assets/vault-assistant-logo-v2.png"
+  : logoUrl;
 
 /* Reads localStorage safely for browsers that block or clear client storage. */
 function readLS(key: string): string | null {
@@ -79,6 +85,16 @@ interface PendingApproval {
   onWritten: () => void;
 }
 
+function skillStatusFromEngineScan(scan: EngineScanResult) {
+  return {
+    gemini: scan.engines.gemini.available,
+    opencode: scan.engines.opencode.available,
+    cursor: scan.engines.cursor.available,
+    copilot: scan.engines.copilot.available,
+    codex: scan.engines.codex.available,
+  };
+}
+
 /* Owns global UI state, persistence, tab lifecycle, and the application layout. */
 export function App() {
   const [tabs, setTabs] = useState<Tab[]>(() => loadTabs());
@@ -89,6 +105,7 @@ export function App() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [engines, setEngines] = useState<ModelOption[]>([]);
+  const [engineScan, setEngineScan] = useState<EngineScanResult | null>(null);
   const [skills, setSkills] = useState({ humanizer: false, gemini: false, opencode: false, cursor: false, copilot: false, codex: false });
   const [availableSkills, setAvailableSkills] = useState<SkillInfo[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -120,6 +137,11 @@ export function App() {
   );
 
   const controllers = useRef(new Map<string, AbortController>());
+
+  const active = tabs.find((t) => t.id === activeId) ?? tabs[0];
+  // Right split pane: its chosen tab, falling back to any other tab, else active.
+  const right =
+    tabs.find((t) => t.id === rightId) ?? tabs.find((t) => t.id !== active?.id) ?? active;
 
   // Reflect theme + density on <html> and persist them.
   useEffect(() => {
@@ -205,9 +227,11 @@ export function App() {
   // Initial load: server config (authoritative) merged with anything saved locally.
   useEffect(() => {
     (async () => {
-      const [meta, config] = await Promise.all([api.meta(), api.getConfig()]);
+      const [meta, config, scan] = await Promise.all([api.meta(), api.getConfig(), api.engineScan()]);
       setModels(meta.models);
       setEngines(meta.engines);
+      setEngineScan(scan);
+      setSkills((prev) => ({ ...prev, ...skillStatusFromEngineScan(scan) }));
       const local = loadSettings();
       const base = normalizeSettings(config);
       const merged: Settings = local ? mergeSettings(base, local) : base;
@@ -280,6 +304,13 @@ export function App() {
   useEffect(() => {
     if (!settings?.vaultDir) return;
     api.skills(settings.vaultDir).then(setSkills).catch(() => {});
+    api
+      .engineScan()
+      .then((scan) => {
+        setEngineScan(scan);
+        setSkills((prev) => ({ ...prev, ...skillStatusFromEngineScan(scan) }));
+      })
+      .catch(() => {});
     api.listSkills(settings.vaultDir).then(setAvailableSkills).catch(() => {});
   }, [settings?.vaultDir]);
 
@@ -289,6 +320,21 @@ export function App() {
     if (!vault) return;
     api.skills(vault).then(setSkills).catch(() => {});
     api.listSkills(vault).then(setAvailableSkills).catch(() => {});
+  };
+
+  // Re-scan CLI paths and the model/reasoning options exposed by each agent.
+  const refreshEnginePaths = async () => {
+    const vault = settings?.vaultDir;
+    const scan = await api.engineScan();
+    setEngineScan(scan);
+    setSkills((prev) => ({ ...prev, ...skillStatusFromEngineScan(scan) }));
+    if (vault) {
+      const [skillStatus, skillList] = await Promise.allSettled([api.skills(vault), api.listSkills(vault)]);
+      if (skillStatus.status === "fulfilled") {
+        setSkills((prev) => ({ ...prev, ...skillStatus.value, ...skillStatusFromEngineScan(scan) }));
+      }
+      if (skillList.status === "fulfilled") setAvailableSkills(skillList.value);
+    }
   };
 
   // Create a skill from the Settings form, then refresh the list on success.
@@ -322,7 +368,7 @@ export function App() {
 
   /* Opens an independent tab using the active default mode and RAG preference. */
   const addTab = () => {
-    const t = newTab(tabs, settings?.rag ?? false, defaultMode);
+    const t = newTab(tabs, settings?.rag ?? false, defaultMode, settings?.vaultDir, active);
     setTabs((prev) => [...prev, t]);
     setActiveId(t.id);
   };
@@ -342,7 +388,7 @@ export function App() {
     setTabs((prev) => {
       const next = prev.filter((t) => t.id !== id);
       if (id === activeId && next.length) setActiveId(next[0].id);
-      return next.length ? next : [newTab()];
+      return next.length ? next : [newTab([], settings?.rag ?? false, defaultMode, settings?.vaultDir)];
     });
   };
 
@@ -354,7 +400,7 @@ export function App() {
       api.cancel(t.id).catch(() => {});
     }
     controllers.current.clear();
-    const fresh = newTab([], settings?.rag ?? false, defaultMode);
+    const fresh = newTab([], settings?.rag ?? false, defaultMode, settings?.vaultDir);
     setTabs([fresh]);
     setActiveId(fresh.id);
     setRightId("");
@@ -698,10 +744,7 @@ export function App() {
     }
   };
 
-  const active = tabs.find((t) => t.id === activeId) ?? tabs[0];
-  // Right split pane: its chosen tab, falling back to any other tab, else active.
-  const right =
-    tabs.find((t) => t.id === rightId) ?? tabs.find((t) => t.id !== active?.id) ?? active;
+  // active and right are declared at the top of App
 
   // Patch a tab by id; live-rename it from content while it is still auto-named.
   /* Updates a tab and refreshes its local title while it remains automatically named. */
@@ -802,6 +845,7 @@ export function App() {
       globalSettings={settings}
       models={models}
       engines={engines}
+      engineScan={engineScan}
       skills={skills}
       availableSkills={availableSkills}
       engineLabel={engineLabel}
@@ -834,8 +878,12 @@ export function App() {
       {design.funEnabled && <FunBackground variant={design.funVariant} />}
       <header className="toolbar">
         <a className="logo" href="#" onClick={(e) => e.preventDefault()} title="Vault Assistant">
-          <span className="logo-mark">VA</span>
-          <span className="logo-text">Vault</span>
+          <img className="logo-mark" src={logoSrc} alt="" aria-hidden="true" />
+          {/* className="logo-mark" src={logoUrl} */}
+          <span className="logo-text" aria-label="vault assistant">
+            <span>vault</span>
+            <span>assistant</span>
+          </span>
         </a>
 
         <TabBar
@@ -1022,6 +1070,7 @@ export function App() {
           settings={settings}
           models={models}
           engines={engines}
+          engineScan={engineScan}
           skills={skills}
           availableSkills={availableSkills}
           logs={logs}
@@ -1036,6 +1085,7 @@ export function App() {
           onDesignChange={changeDesign}
           onCreateSkill={createSkill}
           onRefreshSkills={refreshSkills}
+          onRescanPaths={refreshEnginePaths}
           onClearLogs={() => {
             clearLogs();
             api.clearLogs().catch(() => {});

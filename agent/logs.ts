@@ -6,8 +6,9 @@
 // when it grows well past that.
 import { appendFile, mkdir, readFile, writeFile } from "fs/promises";
 import { join } from "path";
+import { dataDir } from "./paths";
 
-const LOG_DIR = join(import.meta.dir, "..", "logs");
+const LOG_DIR = join(dataDir(), "logs");
 const LOG_FILE = join(LOG_DIR, "activity.jsonl");
 
 // Keep the on-disk log bounded. A little larger than the client cap so the file

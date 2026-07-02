@@ -7,3 +7,6 @@ config.json
 logs/
 bun.lock
 **skills-lock.json
+src-tauri/app/
+src-tauri/binaries/
+src-tauri/target/
