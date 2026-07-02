@@ -13,8 +13,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: docs-build-deploy
@@ -23,6 +21,9 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      DOCS_BUILD: ${{ runner.temp }}/docusaurus-build
+      PAGES_STAGE: ${{ runner.temp }}/pages
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,23 +39,38 @@ jobs:
 
       - name: Build Docusaurus site
         working-directory: website
-        run: bun run build
+        run: bun docusaurus build --out-dir "$DOCS_BUILD"
+
+      - name: Stage Pages artifact
+        run: |
+          rm -rf "$PAGES_STAGE"
+          mkdir -p "$PAGES_STAGE/docs"
+          cp docs/index.html "$PAGES_STAGE/index.html"
+          cp -R docs/assets "$PAGES_STAGE/assets"
+          cp -R docs/legacy "$PAGES_STAGE/legacy"
+          cp -R "$DOCS_BUILD"/. "$PAGES_STAGE/docs/"
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
       - name: Upload docs artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
-          path: docs
+          path: ${{ env.PAGES_STAGE }}
+          include-hidden-files: true
 
   deploy:
+    if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
