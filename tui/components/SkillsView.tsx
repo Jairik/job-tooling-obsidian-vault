@@ -16,6 +16,18 @@ interface Props {
 
 type CreateField = "name" | "description" | "body";
 
+function skillMeta(skill: SkillInfo): string {
+  const parts: string[] = [];
+  if (skill.estimatedTokens) {
+    parts.push(`~${skill.estimatedTokens.toLocaleString()} tokens`);
+  } else if (skill.chars) {
+    parts.push(`${skill.chars.toLocaleString()} chars`);
+  }
+  if (skill.tooLarge) parts.push("too large to embed");
+  if (skill.hasSupportingFiles) parts.push("SKILL.md only");
+  return parts.join(" | ");
+}
+
 export function SkillsView({
   availableSkills,
   selected,
@@ -89,17 +101,17 @@ export function SkillsView({
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="magenta" paddingX={1}>
-      <Text bold>Skills</Text>
+      <Text bold>Portable skills</Text>
       {showShortcuts ? <Text dimColor>j/k select · space toggle · n create · r refresh · Esc close</Text> : null}
       {toolStatus ? <Text dimColor>{toolStatus}</Text> : null}
       {availableSkills.map((skill, i) => (
         <Text key={`${skill.scope}:${skill.name}`} color={i === idx ? "cyan" : undefined} wrap="truncate-end">
           {i === idx ? "› " : "  "}
           <Text color={selected.includes(skill.name) ? "green" : "gray"}>{selected.includes(skill.name) ? "[x]" : "[ ]"}</Text>{" "}
-          {skill.name} <Text dimColor>({skill.scope}) {skill.description}</Text>
+          {skill.name} <Text dimColor>({skill.scope}) {skill.description} {skillMeta(skill)}</Text>
         </Text>
       ))}
-      {!availableSkills.length ? <Text dimColor>No installed skills found.</Text> : null}
+      {!availableSkills.length ? <Text dimColor>No portable skills found.</Text> : null}
     </Box>
   );
 }

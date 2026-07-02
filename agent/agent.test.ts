@@ -16,6 +16,7 @@ import {
   buildCliCleanupPrompt,
   buildCliFollowupPrompt,
   buildAppend,
+  buildHumanizeTurnPrompt,
   buildSkillsNote,
   injectSkillsIntoPrompt,
   buildSummarizePrompt,
@@ -27,7 +28,7 @@ import {
   defaultSettings,
   normalizeServerSettings,
 } from "./config";
-import { loadSelectedSkills, loadSkillCreatorGuide } from "./skills";
+import { MAX_SKILL_INSTRUCTIONS_CHARS, loadSelectedSkills, loadSkillCreatorGuide, listSkills } from "./skills";
 import { buildWebResearchSkill, parseWebToolRequest, resolveWebPage, webResearchEnabled } from "./web";
 import { fetchUsageForTarget, parseCodexProfileStats, parseCodexUsagePayload, parseOpenCodeStats } from "./usage";
 import {
@@ -160,10 +161,22 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
     // uses, without relying on a developer's real ~/.claude skill collection.
     await mkdir(skillDir, { recursive: true });
     await writeFile(skillPath, instructions, "utf8");
+    await writeFile(join(skillDir, "README.md"), "Supporting details that are not embedded.", "utf8");
+
+    const listed = await listSkills(vaultDir);
+    const listedSkill = listed.find((skill) => skill.name === "portable-review");
+    expect(listedSkill).toMatchObject({
+      chars: instructions.length,
+      estimatedTokens: Math.ceil(instructions.length / 4),
+      hasSupportingFiles: true,
+      tooLarge: false,
+    });
+
     const resolved = await loadSelectedSkills(vaultDir, ["portable-review", "missing-skill", "portable-review"]);
 
     expect(resolved.missing).toEqual(["missing-skill"]);
     expect(resolved.unreadable).toEqual([]);
+    expect(resolved.oversized).toEqual([]);
     expect(resolved.skills).toHaveLength(1); // Duplicate UI selections cannot duplicate prompt instructions.
     expect(resolved.skills[0]).toMatchObject({ name: "portable-review", instructions });
 
@@ -187,6 +200,14 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
       expect(built.prompt).toContain(instructions);
     }
 
+    const largeSkillDir = join(vaultDir, ".claude", "skills", "too-large");
+    await mkdir(largeSkillDir, { recursive: true });
+    await writeFile(join(largeSkillDir, "SKILL.md"), "x".repeat(MAX_SKILL_INSTRUCTIONS_CHARS + 1), "utf8");
+    expect((await listSkills(vaultDir)).find((skill) => skill.name === "too-large")).toMatchObject({ tooLarge: true });
+    const oversized = await loadSelectedSkills(vaultDir, ["too-large"]);
+    expect(oversized.skills).toEqual([]);
+    expect(oversized.oversized).toEqual(["too-large"]);
+
     await rm(vaultDir, { recursive: true, force: true });
   });
 
@@ -207,6 +228,11 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
     const hum = buildCliHumanizePrompt("draft response");
     expect(hum).toContain("draft response");
     expect(hum).toContain("Rewrite the answer below to remove all signs of AI writing");
+    expect(buildHumanizeTurnPrompt(false)).toContain("Rewrite your previous answer using these rules");
+    expect(buildHumanizeTurnPrompt(false)).not.toContain("Apply the humanizer skill");
+    const fallbackAppend = buildAppend({ persona: "P", mode: "ask", phase: "humanize", useHumanizerSkill: false });
+    expect(fallbackAppend).toContain("Rewrite your previous answer to remove signs of AI writing");
+    expect(fallbackAppend).not.toContain("Use the humanizer skill");
 
     const clean = buildCliCleanupPrompt("messy text");
     expect(clean).toContain("messy text");
@@ -336,6 +362,7 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
     const helpGuide = await Bun.file(join(rootPath, "src", "components", "HelpGuide.tsx")).text();
     const onboarding = await Bun.file(join(rootPath, "src", "components", "Onboarding.tsx")).text();
     const tabView = await Bun.file(join(rootPath, "src", "components", "TabView.tsx")).text();
+    const skillPicker = await Bun.file(join(rootPath, "src", "components", "SkillPicker.tsx")).text();
     const conversationView = await Bun.file(join(rootPath, "tui", "components", "ConversationView.tsx")).text();
     const quickNotes = await Bun.file(join(rootPath, "src", "components", "QuickNotes.tsx")).text();
     const prepackaged = await Bun.file(join(rootPath, "shared", "prepackaged-skills.ts")).text();
@@ -348,10 +375,16 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
     expect(buildJobPersona()).not.toMatch(/\b(applicant|job-application|JOB-APPLICATION)\b/i);
     expect(helpGuide).toContain("<strong>Settings -&gt; Persona</strong>");
     expect(helpGuide).not.toMatch(/\b(job|application|applicant|cover-letter)\b/i);
+    expect(settingsPanel).toContain("Built-in capabilities");
+    expect(settingsPanel).toContain("Portable skills");
+    expect(settingsPanel).not.toContain("Pre-packaged skills");
+    expect(settingsPanel).not.toContain("User skills");
+    expect(skillPicker).toContain("Selected SKILL.md instructions are embedded for every engine.");
 
     const userFacingCopy = [
       settingsPanel,
       helpGuide,
+      skillPicker,
       onboarding,
       tabView,
       conversationView,
@@ -405,6 +438,12 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
     expect(server.tuiShortcutsVisible).toBe(true);
     expect(client.tuiShortcutsVisible).toBe(true);
     expect(normalizeClientSettings({ tuiShortcutsVisible: false } as any).tuiShortcutsVisible).toBe(false);
+  });
+
+  test("normalizeClientSettings honors a custom cleanupModel from raw input", () => {
+    const client = normalizeClientSettings({ cleanupModel: "custom-cleanup-model" } as any);
+    expect(client.cleanupModel).toBe("custom-cleanup-model");
+    expect(client.cleanupModels.claude).toBe("custom-cleanup-model");
   });
 
   test("port env parsing supports a single app port", async () => {
@@ -683,7 +722,8 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
 
   test("TUI generation start clears stale LaTeX output", async () => {
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = async () => new Response(new ReadableStream({ start: (controller) => controller.close() }));
+    globalThis.fetch = (async () =>
+      new Response(new ReadableStream({ start: (controller) => controller.close() }))) as unknown as typeof fetch;
     try {
       const settings = normalizeServerSettings(defaultSettings());
       let session = newSession("ask");
@@ -719,7 +759,7 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
     const originalFetch = globalThis.fetch;
     const encoder = new TextEncoder();
     let releaseStream: (() => void) | undefined;
-    globalThis.fetch = async () =>
+    globalThis.fetch = (async () =>
       new Response(
         new ReadableStream({
           start(controller) {
@@ -730,7 +770,7 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
             };
           },
         })
-      );
+      )) as unknown as typeof fetch;
 
     try {
       const settings = normalizeServerSettings(defaultSettings());
@@ -1044,11 +1084,16 @@ Output tokens: 2,345
     const agentsMdPath = join(rootPath, "AGENTS.md");
     const agentsMd = await Bun.file(agentsMdPath).text();
     expect(agentsMd.length).toBeGreaterThan(0);
-    expect(agentsMd).toContain("docs/WORKFLOW.md");
+    expect(agentsMd).toContain("docs/legacy/WORKFLOW.md");
     expect(agentsMd.toLowerCase()).toContain("test");
+    expect(agentsMd).toContain("is not loaded by Vault Assistant at runtime");
+    expect(agentsMd).toContain("The app uses one port for both frontend and backend traffic");
+    expect(agentsMd).toContain("`PORT` in `.env`");
+    expect(agentsMd).not.toContain("BACKEND_PORT");
+    expect(agentsMd).not.toContain("FRONTEND_PORT");
 
-    // Check docs/WORKFLOW.md
-    const workflowMdPath = join(rootPath, "docs", "WORKFLOW.md");
+    // Check docs/legacy/WORKFLOW.md (moved from docs/WORKFLOW.md during the docs restructure)
+    const workflowMdPath = join(rootPath, "docs", "legacy", "WORKFLOW.md");
     const workflowMd = await Bun.file(workflowMdPath).text();
     expect(workflowMd.length).toBeGreaterThan(0);
     expect(workflowMd).toContain("must be accompanied by a test");

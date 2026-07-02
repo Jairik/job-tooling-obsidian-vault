@@ -189,6 +189,7 @@ interface BuildArgs {
   mode: TabMode;
   skills?: SkillNote[];
   useRag?: boolean;
+  useHumanizerSkill?: boolean;
   phase: "draft" | "humanize" | "followup";
 }
 
@@ -196,7 +197,7 @@ interface BuildArgs {
 // The humanize pass (when enabled) and selected skills apply to every mode; the
 // REVISION note is worded per mode so the ask voice stays neutral.
 /* Builds the mode- and phase-specific system-prompt suffix for a model turn. */
-export function buildAppend({ persona, mode, skills, useRag, phase }: BuildArgs): string {
+export function buildAppend({ persona, mode, skills, useRag, useHumanizerSkill = true, phase }: BuildArgs): string {
   const isAsk = mode === "ask";
   const parts = [persona.trim()];
 
@@ -211,7 +212,9 @@ export function buildAppend({ persona, mode, skills, useRag, phase }: BuildArgs)
 
   if (phase === "humanize") {
     parts.push(
-      `HUMANIZE PASS\n- Use the humanizer skill on your previous answer. Return ONLY the final humanized version of the answer text: no drafts, no audit notes, no commentary, no "still-AI" bullets.`
+      useHumanizerSkill
+        ? `HUMANIZE PASS\n- Use the humanizer skill on your previous answer. Return ONLY the final humanized version of the answer text: no drafts, no audit notes, no commentary, no "still-AI" bullets.`
+        : `HUMANIZE PASS\n- Rewrite your previous answer to remove signs of AI writing using the inline rules in the user prompt. Return ONLY the final humanized version of the answer text: no drafts, no audit notes, no commentary, no "still-AI" bullets.`
     );
   }
 
@@ -334,6 +337,14 @@ export function buildCliDraftPrompt(
 export function buildCliHumanizePrompt(draft: string, systemPrompt = ""): string {
   const system = systemPrompt.trim();
   return `${system ? `${system}\n\n` : ""}${HUMANIZE_INLINE}\n\nAnswer to rewrite:\n"""\n${draft.trim()}\n"""\n\nDo not use any tools or run any commands; just return the rewritten answer.`;
+}
+
+/* Builds a Claude resumed-session humanize request with an inline fallback. */
+export function buildHumanizeTurnPrompt(useSkill: boolean): string {
+  if (useSkill) {
+    return "Apply the humanizer skill to your previous answer. Return ONLY the final humanized version of the answer text - no commentary, no drafts, no audit notes.";
+  }
+  return `${HUMANIZE_INLINE}\n\nRewrite your previous answer using these rules. Return ONLY the final humanized version of the answer text - no commentary, no drafts, no audit notes.`;
 }
 
 // ---- Clean up (lightweight grammar fix + humanize) ----

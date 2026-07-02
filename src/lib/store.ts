@@ -1,6 +1,5 @@
 // Client-side types + localStorage persistence for tabs and global settings.
 import {
-  DEFAULT_CLEANUP_MODEL,
   mergeEngineSettings,
   normalizeEngineSettings,
   toUrlFetchMethod,
@@ -50,6 +49,10 @@ export interface SkillInfo {
   description: string;
   scope: "user" | "vault";
   path?: string;
+  chars?: number;
+  estimatedTokens?: number;
+  hasSupportingFiles?: boolean;
+  tooLarge?: boolean;
 }
 
 // A single fill-in question + the user's answer.
@@ -136,7 +139,6 @@ export function normalizeSettings(raw: Partial<Settings>): Settings {
 
   return {
     engine: raw.engine ?? "claude",
-    cleanupModel: raw.cleanupModel ?? DEFAULT_CLEANUP_MODEL,
     ...engineSettings,
     tuiShortcutsVisible: raw.tuiShortcutsVisible ?? true,
     humanize: raw.humanize ?? true,

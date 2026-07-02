@@ -402,7 +402,7 @@ export function parseOpenCodeStats(output: string): UsageStat[] {
 }
 
 async function fetchOpenCodeUsage(): Promise<UsageResult> {
-  let proc: ReturnType<typeof Bun.spawn>;
+  let proc: Bun.Subprocess<"ignore", "pipe", "pipe">;
   try {
     proc = Bun.spawn(["opencode", "stats", "--days", "7", "--models", "10"], {
       stdout: "pipe",

@@ -18,4 +18,4 @@ This directory contains the core backend logic for Vault Assistant, including LL
 
 ## Testing
 
-Testing is implemented in [`agent.test.ts`](file:///home/jj/repos/vault-assistant/agent/agent.test.ts). Refer to [`docs/WORKFLOW.md`](file:///home/jj/repos/vault-assistant/docs/WORKFLOW.md) for guidelines on writing tests for new backend changes.
+Testing is implemented in [`agent.test.ts`](agent.test.ts). Refer to [`docs/WORKFLOW.md`](../docs/WORKFLOW.md) for guidelines on writing tests for new backend changes.

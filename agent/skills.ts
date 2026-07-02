@@ -47,6 +47,10 @@ interface DiscoveredSkill {
   description: string;
   scope: SkillScope;
   path: string; // absolute path to the skill's SKILL.md
+  chars: number;
+  estimatedTokens: number;
+  hasSupportingFiles: boolean;
+  tooLarge: boolean;
 }
 
 /*
@@ -61,6 +65,12 @@ export interface LoadedSkill {
 }
 
 const SKILL_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
+export const MAX_SKILL_INSTRUCTIONS_CHARS = 24_000;
+
+/* Roughly estimates prompt size without pulling in tokenizer dependencies. */
+export function estimateSkillTokens(chars: number): number {
+  return Math.max(1, Math.ceil(chars / 4));
+}
 
 /* Resolves the filesystem root for global or vault-local skills. */
 function skillsRoot(scope: SkillScope, vaultDir: string): string {
@@ -124,15 +134,31 @@ function scanScope(scope: SkillScope, vaultDir: string): DiscoveredSkill[] {
     return found; // directory doesn't exist
   }
   for (const dirName of names) {
-    const skillPath = join(root, dirName, "SKILL.md");
+    const skillDir = join(root, dirName);
+    const skillPath = join(skillDir, "SKILL.md");
     let md: string;
     try {
       md = readFileSync(skillPath, "utf8");
     } catch {
       continue; // no SKILL.md in this dir
     }
+    let hasSupportingFiles = false;
+    try {
+      hasSupportingFiles = readdirSync(skillDir, { withFileTypes: true }).some((ent) => ent.name !== "SKILL.md");
+    } catch {
+      /* ignore */
+    }
     const { name, description } = parseFrontmatter(md, dirName);
-    found.push({ name, description, scope, path: skillPath });
+    found.push({
+      name,
+      description,
+      scope,
+      path: skillPath,
+      chars: md.length,
+      estimatedTokens: estimateSkillTokens(md.length),
+      hasSupportingFiles,
+      tooLarge: md.length > MAX_SKILL_INSTRUCTIONS_CHARS,
+    });
   }
   return found;
 }
@@ -157,14 +183,15 @@ export async function listSkills(vaultDir: string): Promise<DiscoveredSkill[]> {
 export async function loadSelectedSkills(
   vaultDir: string,
   names: string[] | undefined
-): Promise<{ skills: LoadedSkill[]; missing: string[]; unreadable: string[] }> {
+): Promise<{ skills: LoadedSkill[]; missing: string[]; unreadable: string[]; oversized: string[] }> {
   const selected = [...new Set(names ?? [])];
-  if (!selected.length) return { skills: [], missing: [], unreadable: [] };
+  if (!selected.length) return { skills: [], missing: [], unreadable: [], oversized: [] };
 
   const byName = new Map((await listSkills(vaultDir)).map((skill) => [skill.name, skill]));
   const skills: LoadedSkill[] = [];
   const missing: string[] = [];
   const unreadable: string[] = [];
+  const oversized: string[] = [];
 
   for (const name of selected) {
     const info = byName.get(name);
@@ -179,13 +206,17 @@ export async function loadSelectedSkills(
         unreadable.push(name);
         continue;
       }
+      if (instructions.length > MAX_SKILL_INSTRUCTIONS_CHARS) {
+        oversized.push(name);
+        continue;
+      }
       skills.push({ name: info.name, description: info.description, instructions });
     } catch {
       unreadable.push(name);
     }
   }
 
-  return { skills, missing, unreadable };
+  return { skills, missing, unreadable, oversized };
 }
 
 /*

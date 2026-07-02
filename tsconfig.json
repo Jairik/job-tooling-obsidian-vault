@@ -14,5 +14,5 @@
     "resolveJsonModule": true,
     "types": ["bun"]
   },
-  "exclude": ["node_modules", "dist", "src-tauri/target"]
+  "exclude": ["node_modules", "dist", "src-tauri/target", "website"]
 }

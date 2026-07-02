@@ -123,6 +123,18 @@ function engineCliName(engine: Settings["engine"]): string {
   return engine;
 }
 
+function skillMeta(skill: SkillInfo): string {
+  const parts: string[] = [];
+  if (skill.estimatedTokens) {
+    parts.push(`~${skill.estimatedTokens.toLocaleString()} tokens`);
+  } else if (skill.chars) {
+    parts.push(`${skill.chars.toLocaleString()} chars`);
+  }
+  if (skill.tooLarge) parts.push("too large to embed");
+  if (skill.hasSupportingFiles) parts.push("SKILL.md only; supporting files are not embedded");
+  return parts.join(" | ");
+}
+
 /* Provides configuration for engines, retrieval, vault paths, skills, and visual design. */
 export function SettingsPanel({
   settings,
@@ -895,9 +907,9 @@ export function SettingsPanel({
             {page === "skills" && (
               <div className="s-page">
                 <div className="s-section">
-                  <span className="s-section-lbl">Pre-packaged skills</span>
+                  <span className="s-section-lbl">Built-in capabilities</span>
                   <p className="notice small">
-                    These built-in capabilities ship with the app. Toggle them here to apply them to every tab.
+                    These ship with the app and apply to every tab when enabled.
                   </p>
                   {PREPACKAGED_SKILLS.map((skill) => (
                     <div key={skill.id}>
@@ -913,7 +925,7 @@ export function SettingsPanel({
                       </div>
                       {skill.note && <div className="notice small">{skill.note}</div>}
                       {skill.id === "humanize" && !skills.humanizer && (
-                        <div className="notice small error">humanizer skill not found in ~/.claude/skills or the vault.</div>
+                        <div className="notice small">Native humanizer skill not found; inline cleanup rules will be used.</div>
                       )}
                     </div>
                   ))}
@@ -921,7 +933,7 @@ export function SettingsPanel({
 
                 <div className="s-section">
                   <div className="skills-installed-hd">
-                    <span className="s-section-lbl" style={{ marginBottom: 0 }}>User skills</span>
+                    <span className="s-section-lbl" style={{ marginBottom: 0 }}>Portable skills</span>
                     <div className="skills-installed-controls">
                       <input
                         className="skill-filter-input"
@@ -934,7 +946,7 @@ export function SettingsPanel({
                   </div>
                   <div className="skills-list">
                     {availableSkills.length === 0 ? (
-                      <div className="notice small error">No skills installed yet.</div>
+                      <div className="notice small error">No portable skills installed yet.</div>
                     ) : shownSkills.length === 0 ? (
                       <div className="notice small">No skills match that search.</div>
                     ) : (
@@ -945,6 +957,7 @@ export function SettingsPanel({
                             <span className={`skill-scope-badge ${s.scope}`}>{s.scope}</span>
                           </div>
                           {s.description && <div className="skills-list-desc">{s.description}</div>}
+                          {skillMeta(s) && <div className="skills-list-meta">{skillMeta(s)}</div>}
                         </div>
                       ))
                     )}
@@ -955,8 +968,9 @@ export function SettingsPanel({
                   <span className="s-section-lbl">Create skill</span>
                   <p className="notice small">
                     Describe the skill you want. The agent writes the <code>SKILL.md</code> with the
-                    skill-creator skill, then you can edit it or ask for a revision before saving it to
-                    <code> ~/.claude/skills</code> (user) or <code>.claude/skills</code> in the vault.
+                    skill-creator skill, then you can edit it or ask for a revision. Skills are saved in
+                    Claude-compatible folders, but selected <code>SKILL.md</code> instructions are embedded
+                    for every engine.
                   </p>
                   {skillOk && <div className="vault-status ok">{skillOk}</div>}
                   {!skillFormOpen ? (

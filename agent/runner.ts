@@ -29,6 +29,7 @@ import {
   buildGenerateSkillPrompt,
   buildRewriteSkillPrompt,
   buildSkillsNote,
+  buildHumanizeTurnPrompt,
   buildAdditionalContextBlock,
   buildDocProposePrompt,
   buildLatexAppend,
@@ -199,12 +200,17 @@ async function resolveSkillNotes(
   names: string[] | undefined,
   emit: Emit
 ): Promise<SkillNote[]> {
-  const { skills, missing, unreadable } = await loadSelectedSkills(settings.vaultDir, names);
+  const { skills, missing, unreadable, oversized } = await loadSelectedSkills(settings.vaultDir, names);
   if (missing.length) {
     emit("notice", { message: `Skill${missing.length === 1 ? "" : "s"} not found and skipped: ${missing.join(", ")}.` });
   }
   if (unreadable.length) {
     emit("notice", { message: `Skill${unreadable.length === 1 ? "" : "s"} could not be read and skipped: ${unreadable.join(", ")}.` });
+  }
+  if (oversized.length) {
+    emit("notice", {
+      message: `Skill${oversized.length === 1 ? "" : "s"} too large to embed and skipped: ${oversized.join(", ")}.`,
+    });
   }
   return skills;
 }
@@ -444,6 +450,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
   // Resolve once so both the draft and optional humanize phase receive the same
   // selected skill instructions, independent of the chosen agent.
   const skillNotes = await resolveSkillNotes(args.settings, args.skills, emit);
+  const detectedSkills = await detectSkills(args.settings.vaultDir);
 
   // Drafting-mode extras (extra text field + attached documents) join the prompt
   // as delimited context blocks. Latex mode swaps the output contract via a
@@ -531,11 +538,17 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
         if (hum) finalText = hum;
       } else {
         const hum = await runTurn({
-          prompt:
-            "Apply the humanizer skill to your previous answer. Return ONLY the final humanized version of the answer text — no commentary, no drafts, no audit notes.",
+          prompt: buildHumanizeTurnPrompt(detectedSkills.humanizer),
           resume: finalSession,
           settings: args.settings,
-          append: buildAppend({ persona: args.settings.askPersona, mode: "ask", skills: skillNotes, useRag, phase: "humanize" }),
+          append: buildAppend({
+            persona: args.settings.askPersona,
+            mode: "ask",
+            skills: skillNotes,
+            useRag,
+            useHumanizerSkill: detectedSkills.humanizer,
+            phase: "humanize",
+          }),
           allowedTools: askTools,
           phase: "humanize",
           emit,
@@ -629,11 +642,17 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
     if (args.settings.humanize && !args.latex) {
       emit("phase", { phase: "humanize" });
       const hum = await runTurn({
-        prompt:
-          "Apply the humanizer skill to your previous answer. Return ONLY the final humanized version of the answer text — no commentary, no drafts, no audit notes.",
+        prompt: buildHumanizeTurnPrompt(detectedSkills.humanizer),
         resume: draft.sessionId,
         settings: args.settings,
-        append: buildAppend({ persona: args.settings.persona, mode: "job", skills: skillNotes, useRag, phase: "humanize" }),
+        append: buildAppend({
+          persona: args.settings.persona,
+          mode: "job",
+          skills: skillNotes,
+          useRag,
+          useHumanizerSkill: detectedSkills.humanizer,
+          phase: "humanize",
+        }),
         allowedTools: tools,
         phase: "humanize",
         emit,

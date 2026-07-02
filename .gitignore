@@ -5,7 +5,6 @@ config.json
 .env
 *.log
 logs/
-bun.lock
 **skills-lock.json
 src-tauri/app/
 src-tauri/binaries/

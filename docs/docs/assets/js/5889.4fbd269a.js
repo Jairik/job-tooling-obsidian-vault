@@ -1,0 +1,1 @@
+"use strict";(self.webpackChunkvault_assistant_docs=self.webpackChunkvault_assistant_docs||[]).push([["5889"],{8488(s,e,t){t.d(e,{createArchitectureServices:()=>a.S});var a=t(9221);t(1400)}}]);

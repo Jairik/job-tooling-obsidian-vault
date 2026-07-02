@@ -577,7 +577,7 @@ const serverConfig = {
     console.error(err);
     return new Response(`Server error: ${err?.message ?? err}`, { status: 500 });
   },
-};
+} satisfies Bun.Serve.Options<undefined>;
 
 const server = Bun.serve({
   port: PORT,
