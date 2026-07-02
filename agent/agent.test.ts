@@ -440,6 +440,12 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
     expect(normalizeClientSettings({ tuiShortcutsVisible: false } as any).tuiShortcutsVisible).toBe(false);
   });
 
+  test("normalizeClientSettings honors a custom cleanupModel from raw input", () => {
+    const client = normalizeClientSettings({ cleanupModel: "custom-cleanup-model" } as any);
+    expect(client.cleanupModel).toBe("custom-cleanup-model");
+    expect(client.cleanupModels.claude).toBe("custom-cleanup-model");
+  });
+
   test("port env parsing supports a single app port", async () => {
     expect(parseDotEnv("PORT='8123'\n# ignored\nexport VAULT_DIR=/tmp/vault")).toEqual({
       PORT: "8123",
@@ -716,7 +722,8 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
 
   test("TUI generation start clears stale LaTeX output", async () => {
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = async () => new Response(new ReadableStream({ start: (controller) => controller.close() }));
+    globalThis.fetch = (async () =>
+      new Response(new ReadableStream({ start: (controller) => controller.close() }))) as unknown as typeof fetch;
     try {
       const settings = normalizeServerSettings(defaultSettings());
       let session = newSession("ask");
@@ -752,7 +759,7 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
     const originalFetch = globalThis.fetch;
     const encoder = new TextEncoder();
     let releaseStream: (() => void) | undefined;
-    globalThis.fetch = async () =>
+    globalThis.fetch = (async () =>
       new Response(
         new ReadableStream({
           start(controller) {
@@ -763,7 +770,7 @@ describe("Vault Assistant CLI Engines Audit Suite", () => {
             };
           },
         })
-      );
+      )) as unknown as typeof fetch;
 
     try {
       const settings = normalizeServerSettings(defaultSettings());
@@ -1077,7 +1084,7 @@ Output tokens: 2,345
     const agentsMdPath = join(rootPath, "AGENTS.md");
     const agentsMd = await Bun.file(agentsMdPath).text();
     expect(agentsMd.length).toBeGreaterThan(0);
-    expect(agentsMd).toContain("docs/WORKFLOW.md");
+    expect(agentsMd).toContain("docs/legacy/WORKFLOW.md");
     expect(agentsMd.toLowerCase()).toContain("test");
     expect(agentsMd).toContain("is not loaded by Vault Assistant at runtime");
     expect(agentsMd).toContain("The app uses one port for both frontend and backend traffic");
@@ -1085,8 +1092,8 @@ Output tokens: 2,345
     expect(agentsMd).not.toContain("BACKEND_PORT");
     expect(agentsMd).not.toContain("FRONTEND_PORT");
 
-    // Check docs/WORKFLOW.md
-    const workflowMdPath = join(rootPath, "docs", "WORKFLOW.md");
+    // Check docs/legacy/WORKFLOW.md (moved from docs/WORKFLOW.md during the docs restructure)
+    const workflowMdPath = join(rootPath, "docs", "legacy", "WORKFLOW.md");
     const workflowMd = await Bun.file(workflowMdPath).text();
     expect(workflowMd.length).toBeGreaterThan(0);
     expect(workflowMd).toContain("must be accompanied by a test");

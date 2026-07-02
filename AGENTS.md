@@ -8,11 +8,11 @@ answers inside the app.
 Runtime behavior belongs in the application settings and prompt code, mainly
 `agent/config.ts`, `shared/settings.ts`, persisted `config.json`, and the
 Settings UI. Repository workflow rules belong here and in
-[`docs/WORKFLOW.md`](docs/WORKFLOW.md).
+[`docs/legacy/WORKFLOW.md`](docs/legacy/WORKFLOW.md).
 
 ## Start Here
 
-1. Read [`docs/WORKFLOW.md`](docs/WORKFLOW.md) before making changes.
+1. Read [`docs/legacy/WORKFLOW.md`](docs/legacy/WORKFLOW.md) before making changes.
 2. Inspect the relevant source before deciding on an implementation. Prefer the
    existing architecture and naming conventions over new abstractions.
 3. Add or update tests in `agent/agent.test.ts` for any new behavior, bug fix,
@@ -106,7 +106,7 @@ Keep a hard line between repository instructions and app prompts:
   requests.
 - If you add code that scans local markdown files for runtime context, use an
   allowlist and explicitly exclude repository workflow files such as `AGENTS.md`
-  and `docs/WORKFLOW.md`.
+  and `docs/legacy/WORKFLOW.md`.
 
 ## Product And Copy Conventions
 
@@ -179,7 +179,7 @@ Keep a hard line between repository instructions and app prompts:
 
 ## Documentation
 
-- Keep [`docs/WORKFLOW.md`](docs/WORKFLOW.md) aligned with this file when the
+- Keep [`docs/legacy/WORKFLOW.md`](docs/legacy/WORKFLOW.md) aligned with this file when the
   development workflow changes.
 - Update README and files under `docs/` when behavior changes in a way users or
   future agents need to understand.
