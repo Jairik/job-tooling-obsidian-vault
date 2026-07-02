@@ -28,6 +28,18 @@ interface MenuPos {
   bottom?: number;
 }
 
+function skillMeta(skill: SkillInfo): string {
+  const parts: string[] = [];
+  if (skill.estimatedTokens) {
+    parts.push(`~${skill.estimatedTokens.toLocaleString()} tokens`);
+  } else if (skill.chars) {
+    parts.push(`${skill.chars.toLocaleString()} chars`);
+  }
+  if (skill.tooLarge) parts.push("too large to embed");
+  if (skill.hasSupportingFiles) parts.push("SKILL.md only");
+  return parts.join(" | ");
+}
+
 /* Lets callers choose a deduplicated set of installed skills for a tab request. */
 export function SkillPicker({ availableSkills, selected, onChange, title, open: openProp, onOpenChange }: Props) {
   const [openState, setOpenState] = useState(false);
@@ -104,7 +116,7 @@ export function SkillPicker({ availableSkills, selected, onChange, title, open: 
               </div>
               <div className="skills-dd-list">
                 {availableSkills.length === 0 ? (
-                  <div className="skills-dd-empty">No skills found — add one in Settings.</div>
+                  <div className="skills-dd-empty">No portable skills found. Add one in Settings.</div>
                 ) : shown.length === 0 ? (
                   <div className="skills-dd-empty">No skills match.</div>
                 ) : (
@@ -121,12 +133,13 @@ export function SkillPicker({ availableSkills, selected, onChange, title, open: 
                           <span className={`skill-scope-badge ${s.scope}`}>{s.scope}</span>
                         </span>
                         {s.description && <span className="skills-dd-desc">{s.description}</span>}
+                        {skillMeta(s) && <span className="skills-dd-meta">{skillMeta(s)}</span>}
                       </span>
                     </label>
                   ))
                 )}
               </div>
-              <div className="skills-dd-footer">Selected skills are embedded for every agent.</div>
+              <div className="skills-dd-footer">Selected SKILL.md instructions are embedded for every engine.</div>
             </div>
           </>,
           document.body

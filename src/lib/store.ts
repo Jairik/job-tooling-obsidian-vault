@@ -50,6 +50,10 @@ export interface SkillInfo {
   description: string;
   scope: "user" | "vault";
   path?: string;
+  chars?: number;
+  estimatedTokens?: number;
+  hasSupportingFiles?: boolean;
+  tooLarge?: boolean;
 }
 
 // A single fill-in question + the user's answer.

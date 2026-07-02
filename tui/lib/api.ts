@@ -37,6 +37,10 @@ export interface SkillInfo {
   description: string;
   scope: "user" | "vault";
   path?: string;
+  chars?: number;
+  estimatedTokens?: number;
+  hasSupportingFiles?: boolean;
+  tooLarge?: boolean;
 }
 
 export interface SkillStatus {

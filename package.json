@@ -1,7 +1,23 @@
 {
-  "name": "job-tooling",
+  "name": "@jairik/vault-assistant",
   "version": "0.1.0",
-  "private": true,
+  "description": "A multi-tab web UI for asking questions about your Obsidian vault with Claude Code, grounded in what the vault actually says.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Jairik/vault-assistant.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "agent",
+    "shared",
+    "src",
+    "tui",
+    "server.ts",
+    "run.sh",
+    "README.md"
+  ],
   "type": "module",
   "scripts": {
     "dev": "bun --hot server.ts",

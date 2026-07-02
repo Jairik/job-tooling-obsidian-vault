@@ -116,10 +116,10 @@ const TOPICS: Topic[] = [
     title: "Skills",
     body: (
       <>
-        <strong>Settings -&gt; Skills</strong> toggles built-in skills like <em>Humanize</em>
-        {" "}(on by default) and <em>Web-search research</em>. It also lists your own
-        skills from <code>~/.claude/skills</code> and lets you create new ones in plain
-        language.
+        <strong>Settings -&gt; Skills</strong> toggles built-in capabilities like <em>Humanize</em>
+        {" "}(on by default) and <em>Web-search research</em>. It also lists portable
+        skills from Claude-compatible folders and embeds selected <code>SKILL.md</code>
+        instructions for every engine.
       </>
     ),
   },

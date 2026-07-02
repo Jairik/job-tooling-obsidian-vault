@@ -414,6 +414,7 @@ textarea.f-area::placeholder, input.f-line::placeholder { color: var(--subtle); 
 .skills-dd-item-body { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .skills-dd-name { display: inline-flex; align-items: center; gap: 7px; font-family: var(--font-mono); font-size: 12.5px; font-weight: 500; color: var(--fg); }
 .skills-dd-desc { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+.skills-dd-meta { font-size: 10.5px; color: var(--subtle); line-height: 1.35; }
 .skills-dd-empty { padding: 14px 12px; font-size: 12.5px; color: var(--subtle); text-align: center; }
 .skills-dd-footer { padding: 6px 8px; border-top: 1px solid var(--border); font-size: 11px; color: var(--subtle); }
 .skills-dd-backdrop { position: fixed; inset: 0; z-index: 94; }
@@ -713,6 +714,7 @@ textarea:focus, input:focus, select:focus { border-color: var(--accent); box-sha
 .skills-list-head { display: flex; align-items: center; gap: 8px; }
 .skills-list-name { font-size: 13px; font-weight: 500; }
 .skills-list-desc { font-size: 11px; color: var(--muted); margin-top: 3px; line-height: 1.4; }
+.skills-list-meta { font-size: 10.5px; color: var(--subtle); margin-top: 3px; line-height: 1.35; }
 .skills-actions { display: flex; gap: 8px; margin-top: 8px; }
 .skill-form { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; padding: 12px; border-radius: var(--r-md); border: 1px solid var(--border); background: var(--surface-2); }
 .skill-preview { margin: 0; max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word; padding: 8px 10px; border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--surface); font-family: var(--font-mono); font-size: 12px; line-height: 1.55; color: var(--muted); }

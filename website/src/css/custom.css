@@ -1,0 +1,139 @@
+/**
+ * Theming ported from docs/index.html's OKLCH token system, so the docs
+ * site matches the landing page. Infima is light-mode-first (opposite of
+ * the landing page's dark-first :root), so light tokens live in :root and
+ * dark tokens in [data-theme='dark']; themeConfig.colorMode.defaultMode
+ * in docusaurus.config.js is what makes the site still open in dark mode.
+ */
+
+:root {
+  /* raw brand tokens (light mode) */
+  --bg: oklch(0.985 0.004 285);
+  --bg2: oklch(0.965 0.008 285);
+  --surface: oklch(1 0 0);
+  --surface2: oklch(0.975 0.006 285);
+  --border: oklch(0.9 0.012 285);
+  --border2: oklch(0.84 0.016 285);
+  --text: oklch(0.22 0.02 285);
+  --muted: oklch(0.46 0.02 285);
+  --faint: oklch(0.6 0.02 285);
+  --accent: oklch(0.55 0.24 293);
+  --accent2: oklch(0.48 0.24 293);
+  --accent-ink: oklch(0.99 0.01 285);
+  --glow: oklch(0.6 0.24 293 / 0.22);
+  --accent-d1: oklch(0.5 0.24 293);
+  --accent-d2: oklch(0.47 0.24 293);
+  --accent-d3: oklch(0.4 0.24 293);
+  --accent-l1: oklch(0.6 0.24 293);
+  --accent-l2: oklch(0.63 0.24 293);
+  --accent-l3: oklch(0.7 0.24 293);
+
+  /* Infima mappings, declared once - theme swap happens entirely via the
+     raw tokens above being redeclared in [data-theme='dark'] below. */
+  --ifm-color-primary: var(--accent);
+  --ifm-color-primary-dark: var(--accent-d1);
+  --ifm-color-primary-darker: var(--accent-d2);
+  --ifm-color-primary-darkest: var(--accent-d3);
+  --ifm-color-primary-light: var(--accent-l1);
+  --ifm-color-primary-lighter: var(--accent-l2);
+  --ifm-color-primary-lightest: var(--accent-l3);
+
+  --ifm-background-color: var(--bg);
+  --ifm-background-surface-color: var(--surface);
+  --ifm-font-color-base: var(--text);
+  --ifm-color-content-secondary: var(--muted);
+  --ifm-heading-color: var(--text);
+  --ifm-navbar-background-color: var(--surface);
+  --ifm-navbar-shadow: none;
+  --ifm-footer-background-color: var(--bg2);
+  --ifm-footer-color: var(--muted);
+  --ifm-footer-link-color: var(--muted);
+  --ifm-footer-title-color: var(--text);
+  --ifm-toc-border-color: var(--border);
+  --ifm-table-border-color: var(--border);
+  --ifm-hr-border-color: var(--border);
+  --ifm-color-emphasis-300: var(--border);
+  --ifm-link-color: var(--accent);
+  --ifm-link-hover-color: var(--accent2);
+  --ifm-navbar-link-hover-color: var(--accent);
+
+  --ifm-code-background: var(--surface2);
+  --ifm-code-border-radius: 6px;
+  --ifm-code-font-size: 92%;
+  --ifm-pre-background: var(--bg2);
+  --ifm-pre-border-radius: 12px;
+  --ifm-button-border-radius: 10px;
+  --ifm-card-border-radius: 14px;
+  --ifm-alert-border-radius: 12px;
+  --ifm-pagination-nav-border-radius: 10px;
+  --ifm-global-radius: 8px;
+
+  --ifm-font-family-base: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --ifm-font-family-monospace: 'JetBrains Mono', SFMono-Regular, Menlo, Consolas, monospace;
+  --ifm-heading-font-family: 'Space Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  --docusaurus-highlighted-code-line-bg: color-mix(in oklch, var(--accent) 15%, transparent);
+}
+
+[data-theme='dark'] {
+  --bg: oklch(0.155 0.018 285);
+  --bg2: oklch(0.185 0.022 285);
+  --surface: oklch(0.205 0.024 285);
+  --surface2: oklch(0.235 0.026 285);
+  --border: oklch(0.3 0.024 285);
+  --border2: oklch(0.38 0.03 285);
+  --text: oklch(0.965 0.008 285);
+  --muted: oklch(0.7 0.02 285);
+  --faint: oklch(0.56 0.02 285);
+  --accent: oklch(0.68 0.24 293);
+  --accent2: oklch(0.56 0.24 293);
+  --accent-ink: oklch(0.99 0.01 285);
+  --glow: oklch(0.68 0.24 293 / 0.35);
+  --accent-d1: oklch(0.62 0.24 293);
+  --accent-d2: oklch(0.59 0.24 293);
+  --accent-d3: oklch(0.52 0.24 293);
+  --accent-l1: oklch(0.74 0.24 293);
+  --accent-l2: oklch(0.77 0.24 293);
+  --accent-l3: oklch(0.84 0.24 293);
+}
+
+/* Space Grotesk on brand wordmarks (Infima's heading font already covers
+   h1-h6; the navbar/footer titles use the base font by default). */
+.navbar__title,
+.footer__title {
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 600;
+}
+
+/* Primary buttons: replicate the gradient + glow from docs/index.html. */
+.button--primary {
+  background: linear-gradient(180deg, var(--accent), var(--accent2));
+  color: var(--accent-ink);
+  border: none;
+  box-shadow: 0 10px 30px var(--glow);
+}
+
+/* GitHub navbar pill: replicate the inverted-color "★ GitHub" pill. */
+.navbar-github-link {
+  padding: 8px 14px !important;
+  border-radius: 9px;
+  background: var(--text);
+  color: var(--bg) !important;
+  font-weight: 600;
+  font-size: 14px;
+  transition: opacity 0.15s ease;
+}
+.navbar-github-link:hover {
+  opacity: 0.85;
+}
+.navbar-github-link::before {
+  content: '★ ';
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Sticky navbar translucency + blur, matching docs/index.html's nav. */
+.navbar {
+  backdrop-filter: blur(14px);
+  background: color-mix(in oklch, var(--bg) 78%, transparent);
+  border-bottom: 1px solid var(--border);
+}
