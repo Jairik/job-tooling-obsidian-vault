@@ -2,7 +2,7 @@
 // badge and, for Ask/Job, the input card (job description, question, RAG /
 // Override / Skills controls) plus the streamed answer, activity log and
 // follow-up bar. In Write mode the input card is replaced by the VaultWriter.
-import { useState, type KeyboardEvent } from "react";
+import { useRef, useState, type KeyboardEvent } from "react";
 import type { Settings, Tab, SkillInfo } from "../lib/store";
 import { effectiveEngineModel, effectiveEngineReasoning } from "../../shared/settings";
 import type { ModelOption } from "../lib/api";
@@ -10,6 +10,7 @@ import { AnswerStream } from "./AnswerStream";
 import { ActivityLog } from "./ActivityLog";
 import { VaultWriter } from "./VaultWriter";
 import { SkillPicker } from "./SkillPicker";
+import { formatSize } from "../lib/format";
 
 interface Props {
   tab: Tab;
@@ -26,6 +27,10 @@ interface Props {
   onCleanup: () => void;
   onNewQuestion: () => void;
   onCancel: () => void;
+  // Additional context (drafting mode) + LaTeX output
+  onAttach: (file: File) => Promise<void>;
+  onRemoveAttachment: (id: string) => void;
+  onLatexRecompile: (tex: string) => void;
   // Vault Writer callbacks
   onSummarize: () => void;
   onAutoPlace: () => void;
@@ -34,6 +39,10 @@ interface Props {
   onConfirmFillinWrite: (questionId: string) => void;
   onWriteCleanup: () => void;
   onConfirmWrite: () => void;
+  onDocUpload: (file: File) => Promise<void>;
+  onDocPropose: () => void;
+  onDocWrite: (proposalId: string) => void;
+  onDocDismiss: (proposalId: string) => void;
 }
 
 const ASK_ICON = (
@@ -60,12 +69,16 @@ const WRITE_ICON = (
 );
 
 /* Displays one tab's mode-specific editor, controls, streamed result, and activity. */
-export function TabView({ tab, globalSettings, models, engines, skills, availableSkills, engineLabel, model, onPatch, onGenerate, onFollowUp, onCleanup, onNewQuestion, onCancel, onSummarize, onAutoPlace, onFillinScan, onFillinWrite, onConfirmFillinWrite, onWriteCleanup, onConfirmWrite }: Props) {
+export function TabView({ tab, globalSettings, models, engines, skills, availableSkills, engineLabel, model, onPatch, onGenerate, onFollowUp, onCleanup, onNewQuestion, onCancel, onAttach, onRemoveAttachment, onLatexRecompile, onSummarize, onAutoPlace, onFillinScan, onFillinWrite, onConfirmFillinWrite, onWriteCleanup, onConfirmWrite, onDocUpload, onDocPropose, onDocWrite, onDocDismiss }: Props) {
   const [followText, setFollowText] = useState("");
   // Lets a keyboard shortcut (Ctrl/Cmd+/) open the Skills picker for this pane.
   const [skillsOpen, setSkillsOpen] = useState(false);
+  // "Additional context" chevron dropdown + its hidden file input.
+  const [ctxMenuOpen, setCtxMenuOpen] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const running =
-    tab.phase === "draft" || tab.phase === "humanize" || tab.phase === "cleanup" || tab.phase === "followup";
+    tab.phase === "draft" || tab.phase === "humanize" || tab.phase === "cleanup" || tab.phase === "followup" || tab.phase === "render";
   const isAsk = tab.mode === "ask";
   const isWrite = tab.mode === "write";
   const canGenerate = tab.question.trim().length > 0 && !running;
@@ -130,6 +143,18 @@ export function TabView({ tab, globalSettings, models, engines, skills, availabl
     if (canGenerate) onGenerate();
   };
 
+  /* Uploads the picked document; the chip appears when extraction succeeds. */
+  const handleFilePicked = async (files: FileList | null) => {
+    const file = files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      await onAttach(file);
+    } finally {
+      setUploading(false);
+    }
+  };
+
   return (
     <div className="tab-content" onKeyDown={onPaneKeyDown}>
       {/* Mode bar */}
@@ -168,6 +193,10 @@ export function TabView({ tab, globalSettings, models, engines, skills, availabl
           onConfirmFillinWrite={onConfirmFillinWrite}
           onWriteCleanup={onWriteCleanup}
           onConfirmWrite={onConfirmWrite}
+          onDocUpload={onDocUpload}
+          onDocPropose={onDocPropose}
+          onDocWrite={onDocWrite}
+          onDocDismiss={onDocDismiss}
           onCancel={onCancel}
         />
       ) : (
@@ -187,8 +216,85 @@ export function TabView({ tab, globalSettings, models, engines, skills, availabl
               </div>
             )}
 
+            {!isAsk && tab.extraContextOpen && (
+              <div>
+                <div className="field-head">
+                  <label className="field-lbl">Additional context</label>
+                  <button
+                    className="ctx-remove-btn"
+                    title="Remove the additional context field"
+                    aria-label="Remove additional context"
+                    onClick={() => onPatch({ extraContextOpen: false, extraContext: "" })}
+                  >
+                    ×
+                  </button>
+                </div>
+                <textarea
+                  className="f-area"
+                  rows={4}
+                  placeholder="Extra material to ground the draft — notes, prior answers, background…"
+                  value={tab.extraContext}
+                  onChange={(e) => onPatch({ extraContext: e.target.value })}
+                />
+              </div>
+            )}
+
             <div>
-              <label className="field-lbl">Question</label>
+              <div className="field-head">
+                <label className="field-lbl">Question</label>
+                {!isAsk && (
+                  <div className="ctx-add-wrap">
+                    <button
+                      className={`ctx-add-btn ${ctxMenuOpen ? "active" : ""}`}
+                      title="Add additional context — an extra text field or a document"
+                      aria-label="Add additional context"
+                      disabled={uploading}
+                      onClick={() => setCtxMenuOpen((o) => !o)}
+                    >
+                      {uploading ? (
+                        <span className="ctx-uploading">Extracting…</span>
+                      ) : (
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                          <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                      )}
+                    </button>
+                    {ctxMenuOpen && (
+                      <>
+                        <div className="ctx-menu-backdrop" onClick={() => setCtxMenuOpen(false)} />
+                        <div className="ctx-menu">
+                          <button
+                            onClick={() => {
+                              onPatch({ extraContextOpen: true });
+                              setCtxMenuOpen(false);
+                            }}
+                          >
+                            Additional text field
+                          </button>
+                          <button
+                            onClick={() => {
+                              setCtxMenuOpen(false);
+                              fileInputRef.current?.click();
+                            }}
+                          >
+                            Attach document (PDF / DOCX)
+                          </button>
+                        </div>
+                      </>
+                    )}
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                      style={{ display: "none" }}
+                      onChange={(e) => {
+                        void handleFilePicked(e.target.files);
+                        e.target.value = "";
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
               <textarea
                 className="f-area"
                 rows={3}
@@ -197,6 +303,24 @@ export function TabView({ tab, globalSettings, models, engines, skills, availabl
                 onChange={(e) => onPatch({ question: e.target.value })}
                 onKeyDown={onQuestionKeyDown}
               />
+              {!isAsk && tab.attachments.length > 0 && (
+                <div className="attach-row">
+                  {tab.attachments.map((a) => (
+                    <span key={a.id} className={`attach-chip ${a.expired ? "expired" : ""}`} title={a.expired ? "No longer on the server — re-attach it" : `${a.chars.toLocaleString()} characters extracted`}>
+                      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                        <polyline points="14 2 14 8 20 8" />
+                      </svg>
+                      {a.name} · {formatSize(a.size)}
+                      {a.truncated && <span className="aux">truncated</span>}
+                      {a.expired && <span className="aux">expired</span>}
+                      <button className="attach-x" title="Remove attachment" aria-label={`Remove ${a.name}`} onClick={() => onRemoveAttachment(a.id)}>
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="input-footer">
@@ -213,6 +337,13 @@ export function TabView({ tab, globalSettings, models, engines, skills, availabl
                 </button>
               )}
               <span className="gap-auto" />
+              <button
+                className={`pill-toggle ${tab.latex ? "on" : ""}`}
+                onClick={() => onPatch({ latex: !tab.latex })}
+                title="Return the answer as a compiled PDF document (LaTeX via tectonic), with .tex and .pdf downloads."
+              >
+                LaTeX
+              </button>
               <button
                 className={`pill-toggle ${tab.rag ? "on" : ""}`}
                 onClick={() => onPatch({ rag: !tab.rag })}
@@ -304,6 +435,17 @@ export function TabView({ tab, globalSettings, models, engines, skills, availabl
             answer={tab.answer}
             notice={tab.notice}
             error={tab.error}
+            latex={
+              tab.latex
+                ? {
+                    tex: tab.texSource,
+                    pdfUrl: tab.latexCompileId ? `/api/latex/${tab.latexCompileId}/pdf` : "",
+                    log: tab.latexLog,
+                    compiling: Boolean(tab.latexBusy),
+                    onRecompile: onLatexRecompile,
+                  }
+                : undefined
+            }
             onEditAnswer={(text) => onPatch({ answer: text })}
             onCleanup={onCleanup}
             onRegenerate={onGenerate}

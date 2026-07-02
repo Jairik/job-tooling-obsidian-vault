@@ -1,11 +1,14 @@
 /* Bun server that serves the React app and its JSON/SSE API. */
 import index from "./src/index.html";
-import { generate, followUp, cleanup, cancel, loadSessions, summarize, autoPlace, fillinScan, fillinWrite, writeCleanup, generateSkill } from "./agent/runner";
+import { generate, followUp, cleanup, cancel, loadSessions, summarize, autoPlace, fillinScan, fillinWrite, writeCleanup, generateSkill, docPropose } from "./agent/runner";
 import { detectSkills, listSkills, createSkill } from "./agent/skills";
 import { geminiAvailable, cliAvailable } from "./agent/gemini";
 import { readLogs, appendLog, clearLogs } from "./agent/logs";
 import { fetchUsageForTarget } from "./agent/usage";
 import { resolveWebPage } from "./agent/web";
+import { extractDocument, MAX_UPLOAD_BYTES } from "./agent/documents";
+import { saveAttachment, getAttachment, deleteAttachment, resolveAttachments, sweepAttachments } from "./agent/attachments";
+import { compileLatex, getCompiled, stripTexFences, tectonicAvailable, tectonicInstallHint } from "./agent/latex";
 import { loadConfig, saveConfig, defaultSettings, mergeServerSettings, MODELS, ENGINES, DEFAULT_VAULT, type ServerSettings } from "./agent/config";
 import { effectiveEngineModel } from "./shared/settings";
 import { stat } from "fs/promises";
@@ -14,6 +17,33 @@ const PORT = Number(process.env.PORT || 5173);
 const DEV = process.env.NODE_ENV !== "production";
 
 await loadSessions();
+sweepAttachments().catch(() => {});
+
+// One-time write-approval tokens: minted by /api/vault/preview, consumed by
+// /api/vault/write. Their existence is what makes user approval mandatory — no
+// code path can reach a disk write without having surfaced a preview first.
+const WRITE_TOKEN_TTL_MS = 10 * 60 * 1000;
+const writeTokens = new Map<string, { path: string; expires: number }>();
+
+/* Mints a one-time approval token for a vault-relative path. */
+function mintWriteToken(path: string): string {
+  const now = Date.now();
+  for (const [token, entry] of writeTokens) {
+    if (entry.expires < now) writeTokens.delete(token);
+  }
+  const token = crypto.randomUUID();
+  writeTokens.set(token, { path, expires: now + WRITE_TOKEN_TTL_MS });
+  return token;
+}
+
+/* Resolves a vault-relative path, or null when it escapes the vault. */
+async function resolveVaultPath(filePath: string): Promise<string | null> {
+  const config = await loadConfig();
+  const { join, resolve } = await import("path");
+  const fullPath = join(config.vaultDir, filePath);
+  if (!resolve(fullPath).startsWith(resolve(config.vaultDir))) return null;
+  return fullPath;
+}
 
 /*
  * Wraps a streaming job in a Server-Sent Events response.
@@ -208,8 +238,17 @@ const server = Bun.serve({
       POST: async (req) => {
         const body = await req.json();
         const settings = await resolveSettings(body.settings);
-        return sse((emit) =>
-          generate(
+        // Attachments are stored server-side by upload id; resolve them to text
+        // here so the model never spends a turn parsing documents itself.
+        const attachmentIds = Array.isArray(body.attachmentIds) ? body.attachmentIds.filter((x: unknown) => typeof x === "string") : [];
+        const { docs, missing } = await resolveAttachments(attachmentIds);
+        return sse((emit) => {
+          if (missing.length) {
+            emit("notice", {
+              message: `${missing.length} attached document${missing.length === 1 ? " is" : "s are"} no longer available and ${missing.length === 1 ? "was" : "were"} skipped — re-attach ${missing.length === 1 ? "it" : "them"}.`,
+            });
+          }
+          return generate(
             req.params.id,
             {
               jobDescription: body.jobDescription || "",
@@ -217,11 +256,14 @@ const server = Bun.serve({
               skills: Array.isArray(body.skills) ? body.skills : [],
               rag: Boolean(body.rag),
               mode: body.mode === "job" ? "job" : "ask",
+              extraContext: typeof body.extraContext === "string" ? body.extraContext : "",
+              attachedDocs: docs,
+              latex: Boolean(body.latex),
               settings,
             },
             emit
-          )
-        );
+          );
+        });
       },
     },
 
@@ -232,7 +274,7 @@ const server = Bun.serve({
         return sse((emit) =>
           followUp(
             req.params.id,
-            { text: body.text || "", skills: Array.isArray(body.skills) ? body.skills : [], rag: Boolean(body.rag), mode: body.mode === "job" ? "job" : "ask", settings },
+            { text: body.text || "", skills: Array.isArray(body.skills) ? body.skills : [], rag: Boolean(body.rag), mode: body.mode === "job" ? "job" : "ask", latex: Boolean(body.latex), settings },
             emit
           )
         );
@@ -243,7 +285,7 @@ const server = Bun.serve({
       POST: async (req) => {
         const body = await req.json();
         const settings = await resolveSettings(body.settings);
-        return sse((emit) => cleanup(req.params.id, { text: body.text || "", skills: Array.isArray(body.skills) ? body.skills : [], settings }, emit));
+        return sse((emit) => cleanup(req.params.id, { text: body.text || "", skills: Array.isArray(body.skills) ? body.skills : [], latex: Boolean(body.latex), settings }, emit));
       },
     },
 
@@ -294,6 +336,26 @@ const server = Bun.serve({
       },
     },
 
+    // Analyze an uploaded document (by attachment id) and propose vault writes.
+    "/api/tabs/:id/doc-propose": {
+      POST: async (req) => {
+        const body = await req.json();
+        const settings = await resolveSettings(body.settings);
+        const attachment = typeof body.attachmentId === "string" ? await getAttachment(body.attachmentId) : undefined;
+        return sse((emit) => {
+          if (!attachment) {
+            emit("error", { message: "The uploaded document is no longer available — upload it again." });
+            return Promise.resolve();
+          }
+          return docPropose(
+            req.params.id,
+            { docText: attachment.text, focus: typeof body.focus === "string" ? body.focus : undefined, settings },
+            emit
+          );
+        });
+      },
+    },
+
     "/api/tabs/:id/write-cleanup": {
       POST: async (req) => {
         const body = await req.json();
@@ -302,24 +364,137 @@ const server = Bun.serve({
       },
     },
 
-    "/api/vault/write": {
+    // Approval step 1: reports whether the target exists (with its current
+    // content, for a diff) and mints the one-time token that /api/vault/write
+    // requires. Every vault write therefore passes through a surfaced preview.
+    "/api/vault/preview": {
       POST: async (req) => {
         const body = await req.json();
-        const { path: filePath, content } = body;
+        const filePath = body?.path;
         if (!filePath || typeof filePath !== "string") {
           return Response.json({ ok: false, error: "Missing path" }, { status: 400 });
         }
-        const config = await loadConfig();
-        const { join, dirname, resolve } = await import("path");
-        const { mkdir, writeFile } = await import("fs/promises");
-        const fullPath = join(config.vaultDir, filePath);
-        // Safety: ensure the resolved path is within the vault.
-        if (!resolve(fullPath).startsWith(resolve(config.vaultDir))) {
+        const fullPath = await resolveVaultPath(filePath);
+        if (!fullPath) {
           return Response.json({ ok: false, error: "Path escapes vault directory" }, { status: 400 });
         }
+        let exists = false;
+        let existingContent = "";
+        let tooLarge = false;
+        try {
+          const s = await stat(fullPath);
+          exists = s.isFile();
+          if (exists) {
+            if (s.size > 512 * 1024) tooLarge = true;
+            else existingContent = await Bun.file(fullPath).text();
+          }
+        } catch {
+          /* new file */
+        }
+        return Response.json({ ok: true, path: filePath, exists, existingContent, tooLarge, token: mintWriteToken(filePath) });
+      },
+    },
+
+    "/api/vault/write": {
+      POST: async (req) => {
+        const body = await req.json();
+        const { path: filePath, content, token } = body;
+        if (!filePath || typeof filePath !== "string") {
+          return Response.json({ ok: false, error: "Missing path" }, { status: 400 });
+        }
+        // Mandatory approval: the token proves a preview for this exact path was
+        // surfaced to the user. Consumed before writing (one-time use).
+        const entry = typeof token === "string" ? writeTokens.get(token) : undefined;
+        if (!entry) {
+          return Response.json({ ok: false, error: "Write not approved — request a preview first." }, { status: 403 });
+        }
+        writeTokens.delete(token);
+        if (entry.path !== filePath || entry.expires < Date.now()) {
+          return Response.json({ ok: false, error: "Approval token expired or path mismatch — re-approve the write." }, { status: 403 });
+        }
+        const fullPath = await resolveVaultPath(filePath);
+        if (!fullPath) {
+          return Response.json({ ok: false, error: "Path escapes vault directory" }, { status: 400 });
+        }
+        const { dirname } = await import("path");
+        const { mkdir, writeFile } = await import("fs/promises");
         await mkdir(dirname(fullPath), { recursive: true });
         await writeFile(fullPath, content, "utf8");
         return Response.json({ ok: true, path: filePath });
+      },
+    },
+
+    // ── Document attachments (extracted server-side, stored by upload id) ────
+
+    "/api/attachments": {
+      POST: async (req) => {
+        let form: FormData;
+        try {
+          form = await req.formData();
+        } catch {
+          return Response.json({ ok: false, error: "Expected multipart form data with a `file` field." }, { status: 400 });
+        }
+        const file = form.get("file");
+        if (!(file instanceof File)) {
+          return Response.json({ ok: false, error: "Missing `file` field." }, { status: 400 });
+        }
+        if (file.size > MAX_UPLOAD_BYTES) {
+          return Response.json({ ok: false, error: `File too large (max ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} MB).` }, { status: 400 });
+        }
+        try {
+          const extracted = await extractDocument(file.name, await file.arrayBuffer());
+          const meta = await saveAttachment(file.name, file.size, extracted);
+          return Response.json({ ok: true, ...meta });
+        } catch (e: any) {
+          return Response.json({ ok: false, error: String(e?.message || e) }, { status: 400 });
+        }
+      },
+    },
+
+    "/api/attachments/:id": {
+      GET: async (req) => {
+        const record = await getAttachment(req.params.id);
+        if (!record) return Response.json({ ok: false }, { status: 404 });
+        const { id, name, size, chars, truncated } = record;
+        return Response.json({ ok: true, id, name, size, chars, truncated });
+      },
+      DELETE: async (req) => {
+        await deleteAttachment(req.params.id);
+        return Response.json({ ok: true });
+      },
+    },
+
+    // ── LaTeX output ──────────────────────────────────────────────────────────
+
+    // Synchronous compile used by manual edits / recompiles; generation-time
+    // compiles run inside the SSE pipeline (agent/runner.ts finishLatex).
+    "/api/latex/compile": {
+      POST: async (req) => {
+        const body = await req.json();
+        const tex = typeof body.tex === "string" ? stripTexFences(body.tex) : "";
+        if (!tex) return Response.json({ ok: false, error: "Missing tex source" }, { status: 400 });
+        if (!tectonicAvailable()) {
+          return Response.json({ ok: false, error: "tectonic is not installed", hint: tectonicInstallHint() }, { status: 503 });
+        }
+        const result = await compileLatex(tex);
+        if (!result.ok) {
+          return Response.json({ ok: false, error: "Compilation failed", log: result.log }, { status: 422 });
+        }
+        return Response.json({ ok: true, compileId: result.compileId, pdfUrl: `/api/latex/${result.compileId}/pdf` });
+      },
+    },
+
+    "/api/latex/:id/pdf": {
+      GET: async (req) => {
+        const doc = getCompiled(req.params.id);
+        if (!doc) return new Response("PDF not found — recompile the document.", { status: 404 });
+        return new Response(Bun.file(doc.pdfPath), {
+          headers: {
+            "Content-Type": "application/pdf",
+            "Content-Disposition": `inline; filename="document.pdf"`,
+            "Cache-Control": "no-store",
+          },
+        });
       },
     },
 

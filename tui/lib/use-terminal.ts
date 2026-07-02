@@ -1,0 +1,22 @@
+// Tracks terminal dimensions and updates on resize, so layout (answer-pane height,
+// markdown reflow width) follows the window.
+import { useEffect, useState } from "react";
+import { useStdout } from "ink";
+
+export function useTerminalSize(): { columns: number; rows: number } {
+  const { stdout } = useStdout();
+  const [size, setSize] = useState({
+    columns: stdout.columns || 80,
+    rows: stdout.rows || 24,
+  });
+
+  useEffect(() => {
+    const onResize = () => setSize({ columns: stdout.columns || 80, rows: stdout.rows || 24 });
+    stdout.on("resize", onResize);
+    return () => {
+      stdout.off("resize", onResize);
+    };
+  }, [stdout]);
+
+  return size;
+}

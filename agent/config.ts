@@ -241,13 +241,32 @@ export function buildCliAskPrompt(persona: string, context: string, question: st
   return `${persona.trim()}\n\n${contextBlock(context)}\n\n${buildAskPrompt(question)}\n\n${NO_TOOLS}`;
 }
 
+// Extra material the user attached in drafting mode: an additional free-text
+// field and/or documents extracted server-side. Rendered as clearly delimited
+// prompt sections so the model treats them as context, not instructions.
+/* Formats user-supplied extra text and attached documents for the draft prompt. */
+export function buildAdditionalContextBlock(
+  extra: string,
+  docs: { name: string; text: string }[] = []
+): string {
+  const parts: string[] = [];
+  if (extra.trim()) {
+    parts.push(`Additional context provided by the user:\n"""\n${extra.trim()}\n"""`);
+  }
+  for (const doc of docs) {
+    if (!doc.text.trim()) continue;
+    parts.push(`Attached document — ${doc.name}:\n"""\n${doc.text.trim()}\n"""`);
+  }
+  return parts.join("\n\n");
+}
+
 /* Formats the job description and question used to draft an application answer. */
-export function buildDraftPrompt(jobDescription: string, question: string): string {
+export function buildDraftPrompt(jobDescription: string, question: string, additional = ""): string {
   return `Job description:
 """
 ${jobDescription.trim() || "(none provided)"}
 """
-
+${additional ? `\n${additional}\n` : ""}
 Question to answer:
 """
 ${question.trim()}
@@ -259,8 +278,8 @@ Write the answer to the question above in the first person, grounded in the avai
 // RAG draft prompt (Claude engine): the retrieved excerpts are the only facts
 // available, so they go straight into the prompt and file-reading is disabled.
 /* Formats a draft prompt whose claims must come only from RAG excerpts. */
-export function buildRagDraftPrompt(context: string, jobDescription: string, question: string): string {
-  return `${contextBlock(context)}\n\n${buildDraftPrompt(jobDescription, question)}\n\nGround your answer ONLY in the excerpts above. Do not read or search additional files.`;
+export function buildRagDraftPrompt(context: string, jobDescription: string, question: string, additional = ""): string {
+  return `${contextBlock(context)}\n\n${buildDraftPrompt(jobDescription, question, additional)}\n\nGround your answer ONLY in the excerpts above${additional ? " and the user-provided additional context/documents" : ""}. Do not read or search additional files.`;
 }
 
 // RAG follow-up prompt (Claude engine): refresh the excerpts for the new tweak
@@ -298,9 +317,10 @@ export function buildCliDraftPrompt(
   persona: string,
   context: string,
   jobDescription: string,
-  question: string
+  question: string,
+  additional = ""
 ): string {
-  return `${persona.trim()}\n\n${contextBlock(context)}\n\n${buildDraftPrompt(jobDescription, question)}\n\n${NO_TOOLS}`;
+  return `${persona.trim()}\n\n${contextBlock(context)}\n\n${buildDraftPrompt(jobDescription, question, additional)}\n\n${NO_TOOLS}`;
 }
 
 /* Creates the final-style pass prompt for external CLI engines. */
@@ -444,6 +464,85 @@ Target file: ${targetPath}
 Format the user's answer into clean, well-structured markdown that fits naturally with the surrounding personal context. If the target file already has content in the personal context, format this as an addition/update. Use appropriate headings, bullet points, and formatting.
 
 Output ONLY the formatted markdown content — no commentary, no file path, no fencing.
+
+${NO_TOOLS}`;
+}
+
+/* Proposes vault writes (path + action + content) from an imported document. */
+export function buildDocProposePrompt(
+  docText: string,
+  vaultStructure: string,
+  personalContext: string,
+  focus?: string
+): string {
+  const focusNote = focus?.trim() ? `\nThe user wants to focus on: ${focus.trim()}` : "";
+  return `Analyze an imported document and propose updates to the user's personal vault.${focusNote}
+
+Vault directory structure:
+"""
+${vaultStructure.trim() || "(empty vault)"}
+"""
+
+${contextBlock(personalContext)}
+
+Imported document text:
+"""
+${docText.trim()}
+"""
+
+Identify up to 6 places where this document's information belongs in the vault. For each, propose exactly one write: a new note ("create"), an addition to the end of an existing note ("append"), or a fully rewritten note ("update" — include the COMPLETE replacement content). Draft the actual markdown content, grounded ONLY in the document and personal context above.
+
+Respond with a JSON array of objects with keys "targetPath" (relative .md path), "action" ("create" | "append" | "update"), "content" (the markdown to write), and "rationale" (one sentence explaining why). Output ONLY the JSON array — no commentary, no markdown fencing.
+
+${NO_TOOLS}`;
+}
+
+// ---- LaTeX output mode ----
+// The model fills the predefined template and returns one complete .tex file;
+// the server compiles it with tectonic and the browser displays the PDF.
+
+/* Builds the system-prompt suffix that switches a turn into LaTeX document output. */
+export function buildLatexAppend(template: string): string {
+  return `LATEX OUTPUT MODE
+- Return ONE complete, compilable LaTeX document and NOTHING else: no prose before or after it, no markdown, no code fences.
+- Use exactly this preamble and structure, replacing %%TITLE%% with a fitting document title and %%BODY%% with your content:
+"""
+${template.trim()}
+"""
+- Use only packages already present in the template.
+- Escape LaTeX special characters (& % $ # _ { } ~ ^ \\) wherever they appear in body text.
+- Structure the content with \\section*{...}, \\subsection*{...}, itemize/enumerate, and \\textbf/\\emph as appropriate.`;
+}
+
+/* Asks the model to repair a LaTeX document that failed to compile. */
+export function buildLatexFixPrompt(tex: string, log: string): string {
+  return `This LaTeX document failed to compile.
+
+Compiler errors:
+"""
+${log.trim()}
+"""
+
+Document:
+"""
+${tex.trim()}
+"""
+
+Fix the errors and return the COMPLETE corrected LaTeX document. Do not change the content's meaning, do not add packages, and output ONLY the document — no commentary, no code fences.
+
+${NO_TOOLS}`;
+}
+
+/* Requests a prose-only cleanup pass that keeps a .tex document compilable. */
+export function buildLatexCleanupPrompt(tex: string): string {
+  return `Fix any spelling, grammar, punctuation, and awkward phrasing in the prose of the LaTeX document below. Preserve every fact and the original meaning. Do NOT alter the preamble, packages, commands, environments, or structure — only edit human-readable text.
+
+Document:
+"""
+${tex.trim()}
+"""
+
+Return ONLY the complete cleaned LaTeX document — no commentary, no code fences.
 
 ${NO_TOOLS}`;
 }

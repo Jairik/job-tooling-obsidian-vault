@@ -30,11 +30,13 @@ import {
   type LogEntry,
   type DesignSettings,
   type SkillInfo,
+  type AttachmentMeta,
 } from "./lib/store";
 import { effectiveEngineModel, effectiveEngineReasoning } from "../shared/settings";
 import { api, streamPost, type ModelOption, type SSEHandlers } from "./lib/api";
 import { TabBar } from "./components/TabBar";
 import { TabView } from "./components/TabView";
+import { ApprovalModal } from "./components/ApprovalModal";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { Onboarding } from "./components/Onboarding";
 import { HelpGuide } from "./components/HelpGuide";
@@ -62,6 +64,21 @@ function writeLS(key: string, value: string): void {
   }
 }
 
+// One vault write awaiting the user's explicit approval. Every write flows
+// through this modal: the server refuses writes without the preview token.
+interface PendingApproval {
+  tabId: string;
+  path: string;
+  exists: boolean;
+  existingContent: string;
+  tooLarge?: boolean;
+  newContent: string;
+  token: string;
+  busy: boolean;
+  error?: string;
+  onWritten: () => void;
+}
+
 /* Owns global UI state, persistence, tab lifecycle, and the application layout. */
 export function App() {
   const [tabs, setTabs] = useState<Tab[]>(() => loadTabs());
@@ -86,6 +103,8 @@ export function App() {
   const [helpSeen, setHelpSeen] = useState<boolean>(() => readLS("jt.help.v1") === "seen");
   const [toolbarDropOpen, setToolbarDropOpen] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>(() => loadLogs());
+  // The one write awaiting explicit approval, or null when no modal is open.
+  const [approval, setApproval] = useState<PendingApproval | null>(null);
   const [theme, setTheme] = useState<"dark" | "light">(
     () => (document.documentElement.dataset.theme as "dark" | "light") || "dark"
   );
@@ -197,6 +216,33 @@ export function App() {
       merged.onboarded = base.onboarded;
       setSettings(merged);
     })();
+  }, []);
+
+  // Attachments live only in server-side memory/disk for the session; a restart
+  // (or `bun --hot` reload) can leave a restored tab pointing at an id that no
+  // longer exists. Check once on load so stale chips show "expired" instead of
+  // silently failing on the next generate.
+  useEffect(() => {
+    const ids = new Set<string>();
+    for (const t of tabs) {
+      for (const a of t.attachments) ids.add(a.id);
+      if (t.docAttachment) ids.add(t.docAttachment.id);
+    }
+    if (!ids.size) return;
+    Promise.all([...ids].map((id) => api.getAttachment(id).then((r) => [id, r.ok] as const)))
+      .then((results) => {
+        const missing = new Set(results.filter(([, ok]) => !ok).map(([id]) => id));
+        if (!missing.size) return;
+        setTabs((cur) =>
+          cur.map((t) => ({
+            ...t,
+            attachments: t.attachments.map((a) => (missing.has(a.id) ? { ...a, expired: true } : a)),
+            docAttachment: t.docAttachment && missing.has(t.docAttachment.id) ? { ...t.docAttachment, expired: true } : t.docAttachment,
+          }))
+        );
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Persist tabs on change.
@@ -465,20 +511,15 @@ export function App() {
   };
 
   /* Writes an approved fill-in preview to disk and marks only that question complete. */
-  const confirmFillinWrite = async (tab: Tab, questionId: string) => {
+  const confirmFillinWrite = (tab: Tab, questionId: string) => {
     const q = tab.fillinQuestions?.find(x => x.id === questionId);
     if (!q || !q.targetPath || !q.preview) return;
-    try {
-      const res = await api.vaultWrite(q.targetPath, q.preview);
-      if (res.ok) {
-        updateTab(tab.id, t => ({
-          writeConfirmed: true,
-          fillinQuestions: t.fillinQuestions?.map(xq => xq.id === questionId ? { ...xq, written: true } : xq)
-        }));
-      } else throw new Error("API failed");
-    } catch (err: any) {
-      updateTab(tab.id, { error: err.message });
-    }
+    requestVaultWrite(tab, q.targetPath, q.preview, "create", () => {
+      updateTab(tab.id, t => ({
+        writeConfirmed: true,
+        fillinQuestions: t.fillinQuestions?.map(xq => xq.id === questionId ? { ...xq, written: true } : xq)
+      }));
+    });
   };
 
   /* Sends a writer draft through the formatting and clarity cleanup pass. */
@@ -497,16 +538,163 @@ export function App() {
   };
 
   /* Persists the approved preview, or the raw input when no preview is present. */
-  const confirmWrite = async (tab: Tab) => {
+  const confirmWrite = (tab: Tab) => {
     if (!tab.writePath) return;
     const content = tab.writePreview || tab.writeInput;
     if (!content) return;
+    requestVaultWrite(tab, tab.writePath, content, "create", () => {
+      updateTab(tab.id, { writeConfirmed: true });
+    });
+  };
+
+  // ── Approval gateway ─────────────────────────────────────────────────────
+  // The single path every vault write goes through: preview the target (server
+  // mints a one-time token), let the user review a diff, and only then send the
+  // tokened write. The server independently refuses any write without a valid,
+  // path-matched, unexpired token, so this is enforced even if a future caller
+  // forgets to route through here.
+
+  /* Previews one write and opens the approval modal; does nothing until approved. */
+  const requestVaultWrite = async (
+    tab: Tab,
+    path: string,
+    content: string,
+    action: "create" | "append" | "update",
+    onWritten: () => void
+  ) => {
     try {
-      const res = await api.vaultWrite(tab.writePath, content);
-      if (res.ok) updateTab(tab.id, { writeConfirmed: true });
-      else throw new Error("API failed");
+      const p = await api.vaultPreview(path);
+      if (!p.ok) {
+        updateTab(tab.id, { error: p.error || "Could not preview this write." });
+        return;
+      }
+      const newContent =
+        action === "append" && p.exists && !p.tooLarge
+          ? `${p.existingContent.replace(/\s+$/, "")}\n\n${content}`
+          : content;
+      setApproval({
+        tabId: tab.id,
+        path: p.path,
+        exists: p.exists,
+        existingContent: p.existingContent,
+        tooLarge: p.tooLarge,
+        newContent,
+        token: p.token,
+        busy: false,
+        onWritten,
+      });
     } catch (err: any) {
-      updateTab(tab.id, { error: err.message });
+      updateTab(tab.id, { error: String(err?.message || err) });
+    }
+  };
+
+  /* Consumes the approval token and performs the write the user just reviewed. */
+  const approveWrite = async () => {
+    if (!approval) return;
+    setApproval((a) => (a ? { ...a, busy: true, error: undefined } : a));
+    try {
+      const res = await api.vaultWrite(approval.path, approval.newContent, approval.token);
+      if (!res.ok) throw new Error(res.error || "Write failed");
+      approval.onWritten();
+      setApproval(null);
+    } catch (err: any) {
+      setApproval((a) => (a ? { ...a, busy: false, error: String(err?.message || err) } : a));
+    }
+  };
+
+  const rejectWrite = () => setApproval(null);
+
+  // ── Drafting-mode attachments ────────────────────────────────────────────
+
+  /* Uploads a document; the server extracts its text and returns metadata only. */
+  const handleAttach = async (tab: Tab, file: File) => {
+    const res = await api.uploadAttachment(file);
+    if (!res.ok || !res.id) {
+      updateTab(tab.id, { error: res.error || "Upload failed." });
+      return;
+    }
+    const meta: AttachmentMeta = { id: res.id, name: res.name!, size: res.size!, chars: res.chars!, truncated: Boolean(res.truncated) };
+    updateTab(tab.id, (current) => ({ attachments: [...current.attachments, meta], error: undefined }));
+  };
+
+  const removeAttachment = (tab: Tab, id: string) => {
+    updateTab(tab.id, (current) => ({ attachments: current.attachments.filter((a) => a.id !== id) }));
+    api.deleteAttachment(id).catch(() => {});
+  };
+
+  // ── Write-to-vault document mode ─────────────────────────────────────────
+
+  /* Uploads the document that Write to Vault's Document sub-mode analyzes. */
+  const handleDocUpload = async (tab: Tab, file: File) => {
+    const res = await api.uploadAttachment(file);
+    if (!res.ok || !res.id) {
+      updateTab(tab.id, { error: res.error || "Upload failed." });
+      return;
+    }
+    const meta: AttachmentMeta = { id: res.id, name: res.name!, size: res.size!, chars: res.chars!, truncated: Boolean(res.truncated) };
+    updateTab(tab.id, { docAttachment: meta, docProposals: [], error: undefined });
+  };
+
+  /* Analyzes the uploaded document and proposes vault writes for review. */
+  const runDocPropose = (tab: Tab) => {
+    if (!settings || !tab.docAttachment) return;
+    runWriterStream(
+      tab,
+      "doc-propose",
+      { attachmentId: tab.docAttachment.id, focus: tab.writeInput, settings: overrideSettingsBody(tab, settings) },
+      { phase: "draft", error: undefined, writeConfirmed: false, docProposals: [] },
+      {
+        done: (data) => {
+          try {
+            const raw = data.text.trim();
+            const firstBracket = raw.indexOf("[");
+            const lastBracket = raw.lastIndexOf("]");
+            if (firstBracket === -1 || lastBracket === -1) throw new Error("Invalid JSON returned");
+            const proposals = JSON.parse(raw.substring(firstBracket, lastBracket + 1));
+            updateTab(tab.id, {
+              phase: "done",
+              docProposals: proposals.map((p: any) => ({ ...p, id: uid(), status: "pending" })),
+            });
+          } catch (err: any) {
+            updateTab(tab.id, { phase: "error", error: "Failed to parse proposals: " + err.message });
+          }
+        },
+      }
+    );
+  };
+
+  /* Sends one approved document proposal through the write-approval gateway. */
+  const confirmDocWrite = (tab: Tab, proposalId: string) => {
+    const p = tab.docProposals.find((x) => x.id === proposalId);
+    if (!p || !p.targetPath || !p.content) return;
+    requestVaultWrite(tab, p.targetPath, p.content, p.action, () => {
+      updateTab(tab.id, (t) => ({
+        writeConfirmed: true,
+        docProposals: t.docProposals.map((xp) => (xp.id === proposalId ? { ...xp, status: "written" } : xp)),
+      }));
+    });
+  };
+
+  const dismissDocProposal = (tab: Tab, proposalId: string) => {
+    updateTab(tab.id, (t) => ({
+      docProposals: t.docProposals.map((xp) => (xp.id === proposalId ? { ...xp, status: "rejected" } : xp)),
+    }));
+  };
+
+  // ── LaTeX output mode ─────────────────────────────────────────────────────
+
+  /* Recompiles the (possibly edited) LaTeX source for a tab's answer. */
+  const runLatexRecompile = async (tab: Tab, tex: string) => {
+    updateTab(tab.id, { latexBusy: true, texSource: tex });
+    try {
+      const res = await api.latexCompile(tex);
+      if (res.ok && res.compileId) {
+        updateTab(tab.id, { latexCompileId: res.compileId, latexLog: "", latexBusy: false });
+      } else {
+        updateTab(tab.id, { latexCompileId: "", latexLog: res.log || res.hint || res.error || "Compilation failed.", latexBusy: false });
+      }
+    } catch (err: any) {
+      updateTab(tab.id, { latexLog: String(err?.message || err), latexBusy: false });
     }
   };
 
@@ -624,6 +812,9 @@ export function App() {
       onCleanup={() => runCleanup(paneTab)}
       onNewQuestion={() => addQuestionTab(paneTab)}
       onCancel={() => cancel(paneTab.id)}
+      onAttach={(file) => handleAttach(paneTab, file)}
+      onRemoveAttachment={(id) => removeAttachment(paneTab, id)}
+      onLatexRecompile={(tex) => runLatexRecompile(paneTab, tex)}
       onSummarize={() => runSummarize(paneTab)}
       onAutoPlace={() => runAutoPlace(paneTab)}
       onFillinScan={() => runFillinScan(paneTab)}
@@ -631,6 +822,10 @@ export function App() {
       onConfirmFillinWrite={(qid) => confirmFillinWrite(paneTab, qid)}
       onWriteCleanup={() => runWriteCleanup(paneTab)}
       onConfirmWrite={() => confirmWrite(paneTab)}
+      onDocUpload={(file) => handleDocUpload(paneTab, file)}
+      onDocPropose={() => runDocPropose(paneTab)}
+      onDocWrite={(pid) => confirmDocWrite(paneTab, pid)}
+      onDocDismiss={(pid) => dismissDocProposal(paneTab, pid)}
     />
   );
 
@@ -857,6 +1052,20 @@ export function App() {
       {quickOpen && <QuickNotes onClose={() => setQuickOpen(false)} />}
 
       {shortcutsOpen && <ShortcutsOverlay onClose={() => setShortcutsOpen(false)} />}
+
+      {approval && (
+        <ApprovalModal
+          path={approval.path}
+          exists={approval.exists}
+          existingContent={approval.existingContent}
+          tooLarge={approval.tooLarge}
+          newContent={approval.newContent}
+          busy={approval.busy}
+          error={approval.error}
+          onApprove={approveWrite}
+          onReject={rejectWrite}
+        />
+      )}
 
       {settings && !settings.onboarded && (
         <Onboarding

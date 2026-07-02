@@ -1,9 +1,13 @@
 // Renders a tab's answer: a phase status pill, the live streaming text (which
 // becomes an editable textarea once the run finishes), copy / regenerate / clean-up
 // actions, and — in job mode — a collapsible view of the original pre-humanize draft.
+// In latex mode the finished answer is a compiled PDF instead of markdown; the
+// same actions apply, with Edit operating on the raw .tex source (recompiled on
+// exit) and Copy copying the source verbatim.
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Phase, TabMode } from "../lib/store";
 import { Markdown } from "./Markdown";
+import { PdfPreview } from "./PdfPreview";
 
 const PHASE_LABEL: Record<Phase, string> = {
   idle: "",
@@ -11,9 +15,18 @@ const PHASE_LABEL: Record<Phase, string> = {
   humanize: "Humanizing…",
   cleanup: "Cleaning up…",
   followup: "Revising…",
+  render: "Rendering PDF…",
   done: "Ready",
   error: "Error",
 };
+
+export interface LatexView {
+  tex: string;
+  pdfUrl: string; // "" when no compiled PDF exists (failed compile / restart)
+  log: string; // compile errors or the tectonic install hint
+  compiling: boolean;
+  onRecompile: (tex: string) => void;
+}
 
 interface Props {
   phase: Phase;
@@ -22,13 +35,14 @@ interface Props {
   answer: string;
   notice?: string;
   error?: string;
+  latex?: LatexView;
   onEditAnswer: (text: string) => void;
   onCleanup: () => void;
   onRegenerate: () => void;
 }
 
 /* Shows streamed model text, editable final output, errors, and answer actions. */
-export function AnswerStream({ phase, mode, draft, answer, notice, error, onEditAnswer, onCleanup, onRegenerate }: Props) {
+export function AnswerStream({ phase, mode, draft, answer, notice, error, latex, onEditAnswer, onCleanup, onRegenerate }: Props) {
   const [showDraft, setShowDraft] = useState(false);
   const [copied, setCopied] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -37,7 +51,7 @@ export function AnswerStream({ phase, mode, draft, answer, notice, error, onEdit
   // Points at the rendered-markdown container; its `innerText` is the visible
   // text with markers stripped, used for both copy and entering edit mode.
   const previewRef = useRef<HTMLDivElement>(null);
-  const running = phase === "draft" || phase === "humanize" || phase === "cleanup" || phase === "followup";
+  const running = phase === "draft" || phase === "humanize" || phase === "cleanup" || phase === "followup" || phase === "render";
   // Leave the editor whenever a new run starts so the regenerated answer renders
   // formatted (and isn't shown as raw markdown in the textarea).
   useEffect(() => {
@@ -59,18 +73,26 @@ export function AnswerStream({ phase, mode, draft, answer, notice, error, onEdit
   /* The visible, markdown-stripped text — what the user actually sees. */
   const plainText = () => previewRef.current?.innerText ?? (answer || draft);
 
-  /* Copies the answer as plain characters (no markdown syntax). */
+  /* Copies the answer as plain characters (no markdown syntax); latex mode
+     copies the raw .tex source verbatim. */
   const copy = async () => {
-    await navigator.clipboard.writeText(editing ? answer : plainText());
+    await navigator.clipboard.writeText(latex ? latex.tex || answer : editing ? answer : plainText());
     setCopied(true);
     setTimeout(() => setCopied(false), 1200);
   };
 
   /* Switches to the editor, first flattening the answer to plain text so no
-     markdown markers survive into (or persist after) editing. */
+     markdown markers survive into (or persist after) editing. Latex mode edits
+     the raw source untouched. */
   const enterEdit = () => {
-    onEditAnswer(plainText());
+    if (!latex) onEditAnswer(plainText());
     setEditing(true);
+  };
+
+  /* Leaves the editor; latex mode recompiles the (possibly edited) source. */
+  const exitEdit = () => {
+    setEditing(false);
+    if (latex) latex.onRecompile(answer);
   };
 
   // Map the current phase onto the status-pill tone (hidden while idle).
@@ -106,9 +128,9 @@ export function AnswerStream({ phase, mode, draft, answer, notice, error, onEdit
       {hasContent && !running && (
         <button
           className={`ans-action-btn ${editing ? "active" : ""}`}
-          title={editing ? "Done editing" : "Edit as plain text"}
+          title={editing ? (latex ? "Done editing — recompile" : "Done editing") : latex ? "Edit LaTeX source" : "Edit as plain text"}
           aria-label={editing ? "Done editing" : "Edit"}
-          onClick={() => (editing ? setEditing(false) : enterEdit())}
+          onClick={() => (editing ? exitEdit() : enterEdit())}
         >
           {editing ? (
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -173,13 +195,28 @@ export function AnswerStream({ phase, mode, draft, answer, notice, error, onEdit
       ) : hasContent ? (
         editing ? (
           <textarea
-            className="answer-edit-area"
+            className={`answer-edit-area${latex ? " mono" : ""}`}
             value={answer}
-            spellCheck
+            spellCheck={!latex}
             autoFocus={primary}
             placeholder="The grounded answer will appear here."
             onChange={(e) => onEditAnswer(e.target.value)}
           />
+        ) : latex ? (
+          <>
+            {latex.log && (
+              <div className="error-box">
+                <pre className="latex-log">{latex.log}</pre>
+              </div>
+            )}
+            <PdfPreview
+              pdfUrl={latex.pdfUrl}
+              tex={latex.tex || answer}
+              tall={expanded && primary}
+              compiling={latex.compiling}
+              onRecompile={() => latex.onRecompile(latex.tex || answer)}
+            />
+          </>
         ) : (
           <div className="answer-text">
             <Markdown ref={primary ? previewRef : undefined}>{answer}</Markdown>

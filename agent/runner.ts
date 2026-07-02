@@ -29,9 +29,15 @@ import {
   buildGenerateSkillPrompt,
   buildRewriteSkillPrompt,
   buildSkillsNote,
+  buildAdditionalContextBlock,
+  buildDocProposePrompt,
+  buildLatexAppend,
+  buildLatexFixPrompt,
+  buildLatexCleanupPrompt,
   resolveDefaultSystemPrompt,
   type SkillNote,
 } from "./config";
+import { compileLatex, loadLatexTemplate, stripTexFences, tectonicAvailable, tectonicInstallHint } from "./latex";
 import { DEFAULT_CLAUDE_MODEL, DEFAULT_CLEANUP_MODEL, effectiveEngineModel, type TabMode } from "../shared/settings";
 import type { ServerSettings } from "./config";
 import { detectSkills, loadSelectedSkills, loadSkillCreatorGuide, parseGeneratedSkill } from "./skills";
@@ -320,6 +326,71 @@ function withSkillTool(tools: string[] | undefined, hasSkills: boolean): string[
   return tools.includes("Skill") ? tools : ["Skill", ...tools];
 }
 
+/* Derives the lightweight settings used for cleanup-grade model turns. */
+function cleanupModelSettings(settings: ServerSettings): ServerSettings {
+  return {
+    ...settings,
+    model: settings.cleanupModel || DEFAULT_CLEANUP_MODEL,
+    effort: "low",
+    engineModels: { ...(settings.engineModels ?? {}), claude: settings.cleanupModel || DEFAULT_CLEANUP_MODEL },
+    engineReasoning: { ...(settings.engineReasoning ?? {}), claude: "low" },
+  };
+}
+
+// Compile the model's LaTeX output and report the result over SSE. On a failed
+// compile, one automatic fix round runs on the cleanup model before giving up —
+// after that the user can still edit the source and recompile manually. Returns
+// the (possibly fixed) source, which becomes the durable `done` text.
+/* Compiles latex-mode output, attempting one automatic model-driven repair. */
+async function finishLatex(
+  rawText: string,
+  settings: ServerSettings,
+  emit: Emit,
+  abort: AbortController
+): Promise<string> {
+  let tex = stripTexFences(rawText);
+  if (!tectonicAvailable()) {
+    emit("latex", { status: "missing", tex, hint: tectonicInstallHint() });
+    return tex;
+  }
+
+  emit("phase", { phase: "render" });
+  let result = await compileLatex(tex);
+
+  if (!result.ok && !abort.signal.aborted) {
+    emit("notice", { message: "LaTeX compilation failed — attempting an automatic fix." });
+    try {
+      const fixed = await runTurn({
+        prompt: buildLatexFixPrompt(tex, result.log),
+        settings: cleanupModelSettings(settings),
+        append: "You fix LaTeX compilation errors. Return only the complete corrected document.",
+        allowedTools: RAG_TOOLS,
+        phase: "render",
+        emit,
+        abort,
+        suppressText: true,
+      });
+      const fixedTex = stripTexFences(fixed.text);
+      if (fixedTex) {
+        const retry = await compileLatex(fixedTex);
+        if (retry.ok) {
+          tex = fixedTex;
+          result = retry;
+        }
+      }
+    } catch {
+      /* fall through to the failed report with the original log */
+    }
+  }
+
+  if (result.ok) {
+    emit("latex", { status: "ok", compileId: result.compileId, pdfUrl: `/api/latex/${result.compileId}/pdf`, tex });
+  } else {
+    emit("latex", { status: "failed", log: result.log, tex });
+  }
+  return tex;
+}
+
 interface GenerateArgs {
   jobDescription: string;
   question: string;
@@ -327,6 +398,12 @@ interface GenerateArgs {
   rag: boolean;
   mode: TabMode;
   settings: ServerSettings;
+  // Drafting-mode extras: the additional free-text field and server-extracted
+  // attached documents (resolved from upload ids by the endpoint).
+  extraContext: string;
+  attachedDocs: { name: string; text: string }[];
+  // When true the model fills the LaTeX template and the result is compiled.
+  latex: boolean;
 }
 
 /* Generates a new answer, including draft/humanize phases when configured. */
@@ -340,11 +417,23 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
   // selected skill instructions, independent of the chosen agent.
   const skillNotes = await resolveSkillNotes(args.settings, args.skills, emit);
 
+  // Drafting-mode extras (extra text field + attached documents) join the prompt
+  // as delimited context blocks. Latex mode swaps the output contract via a
+  // system-prompt suffix (Claude) or a prompt prefix (CLI engines).
+  const additional = isAsk ? "" : buildAdditionalContextBlock(args.extraContext, args.attachedDocs ?? []);
+  const latexAppend = args.latex ? buildLatexAppend(await loadLatexTemplate()) : "";
+  const withLatex = (append: string) => (latexAppend ? `${append}\n\n${latexAppend}` : append);
+  const cliLatexPrefix = latexAppend ? `${latexAppend}\n\n` : "";
+
   let finalText = "";
   let finalSession: string | undefined;
 
-  // Ask mode retrieves on the question alone; job mode also factors in the JD.
-  const ragQuery = isAsk ? args.question : `${args.jobDescription}\n\n${args.question}`;
+  // Ask mode retrieves on the question alone; job mode also factors in the JD
+  // and the extra text field (attached doc text goes into the prompt verbatim,
+  // so it would only skew the retrieval query).
+  const ragQuery = isAsk
+    ? args.question
+    : [args.jobDescription, args.extraContext, args.question].filter(Boolean).join("\n\n");
 
   if (isAsk) {
     // ── Ask mode: a grounded answer turn, then an optional humanize pass ────
@@ -373,7 +462,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
       let context = ragContext;
       if (!context) context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
       finalText = await runCliAgentTurn(args.settings.engine, {
-        prompt: buildCliAskPrompt(args.settings.askPersona, context, args.question),
+        prompt: cliLatexPrefix + buildCliAskPrompt(args.settings.askPersona, context, args.question),
         skills: skillNotes,
         phase: "draft",
         emit,
@@ -384,7 +473,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
       const ans = await runClaudeAgentTurn({
         prompt: useRag ? buildRagAskPrompt(ragContext, args.question) : buildAskPrompt(args.question),
         settings: args.settings,
-        append: buildAppend({ persona: args.settings.askPersona, mode: "ask", skills: skillNotes, useRag, phase: "draft" }),
+        append: withLatex(buildAppend({ persona: args.settings.askPersona, mode: "ask", skills: skillNotes, useRag, phase: "draft" })),
         allowedTools: askTools,
         phase: "draft",
         emit,
@@ -395,8 +484,9 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
     }
 
     // The Humanize pre-packaged skill applies to every answer mode, so ask-mode
-    // answers also get the de-AI rewrite when it is enabled.
-    if (args.settings.humanize && finalText) {
+    // answers also get the de-AI rewrite when it is enabled. Latex mode skips it:
+    // a prose-humanizing pass would corrupt LaTeX markup.
+    if (args.settings.humanize && finalText && !args.latex) {
       emit("phase", { phase: "humanize" });
       if (isCliEngine) {
         const hum = await runCliTurn(args.settings.engine, {
@@ -425,6 +515,8 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
       }
     }
 
+    if (args.latex && finalText) finalText = await finishLatex(finalText, args.settings, emit, abort);
+
     sessions.set(tabId, { sessionId: finalSession, abort: undefined, lastAnswer: finalText });
     await persistSessions();
     emit("done", { text: finalText, sessionId: finalSession });
@@ -445,7 +537,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
     if (!context) context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
     emit("phase", { phase: "draft" });
     const draft = await runCliAgentTurn(args.settings.engine, {
-      prompt: buildCliDraftPrompt(args.settings.persona, context, args.jobDescription, args.question),
+      prompt: cliLatexPrefix + buildCliDraftPrompt(args.settings.persona, context, args.jobDescription, args.question, additional),
       skills: skillNotes,
       phase: "draft",
       emit,
@@ -455,7 +547,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
     emit("draft", { text: draft });
     finalText = draft;
 
-    if (args.settings.humanize && draft) {
+    if (args.settings.humanize && draft && !args.latex) {
       emit("phase", { phase: "humanize" });
       const hum = await runCliTurn(args.settings.engine, {
         prompt: buildCliHumanizePrompt(draft, args.settings.persona),
@@ -486,10 +578,10 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
     emit("phase", { phase: "draft" });
     const draft = await runClaudeAgentTurn({
       prompt: useRag
-        ? buildRagDraftPrompt(ragContext, args.jobDescription, args.question)
-        : buildDraftPrompt(args.jobDescription, args.question),
+        ? buildRagDraftPrompt(ragContext, args.jobDescription, args.question, additional)
+        : buildDraftPrompt(args.jobDescription, args.question, additional),
       settings: args.settings,
-      append: buildAppend({ persona: args.settings.persona, mode: "job", skills: skillNotes, useRag, phase: "draft" }),
+      append: withLatex(buildAppend({ persona: args.settings.persona, mode: "job", skills: skillNotes, useRag, phase: "draft" })),
       allowedTools: tools,
       phase: "draft",
       emit,
@@ -499,7 +591,7 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
     finalText = draft.text;
     finalSession = draft.sessionId;
 
-    if (args.settings.humanize) {
+    if (args.settings.humanize && !args.latex) {
       emit("phase", { phase: "humanize" });
       const hum = await runTurn({
         prompt:
@@ -517,6 +609,8 @@ export async function generate(tabId: string, args: GenerateArgs, emit: Emit): P
     }
   }
 
+  if (args.latex && finalText) finalText = await finishLatex(finalText, args.settings, emit, abort);
+
   sessions.set(tabId, { sessionId: finalSession, abort: undefined, lastAnswer: finalText });
   await persistSessions();
   emit("done", { text: finalText, sessionId: finalSession });
@@ -528,6 +622,7 @@ interface FollowUpArgs {
   rag: boolean;
   mode: TabMode;
   settings: ServerSettings;
+  latex: boolean;
 }
 
 /* Revises the most recent answer using the follow-up text for a tab. */
@@ -543,6 +638,8 @@ export async function followUp(tabId: string, args: FollowUpArgs, emit: Emit): P
   const persona = args.mode === "ask" ? args.settings.askPersona : args.settings.persona;
   const isCliEngine = args.settings.engine !== "claude";
   const skillNotes = await resolveSkillNotes(args.settings, args.skills, emit);
+  // Latex-mode revisions must keep returning a complete compilable document.
+  const latexAppend = args.latex ? buildLatexAppend(await loadLatexTemplate()) : "";
 
   let finalText = "";
   let finalSession = prev?.sessionId;
@@ -555,8 +652,9 @@ export async function followUp(tabId: string, args: FollowUpArgs, emit: Emit): P
     let context = "";
     if (args.rag) context = await retrieveForQuery(args.settings, args.text, emit);
     if (!context) context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
+    const cliPrompt = buildCliFollowupPrompt(persona, context, prev?.lastAnswer ?? "", args.text);
     finalText = await runCliAgentTurn(args.settings.engine, {
-      prompt: buildCliFollowupPrompt(persona, context, prev?.lastAnswer ?? "", args.text),
+      prompt: latexAppend ? `${latexAppend}\n\n${cliPrompt}` : cliPrompt,
       skills: skillNotes,
       phase: "followup",
       emit,
@@ -568,11 +666,12 @@ export async function followUp(tabId: string, args: FollowUpArgs, emit: Emit): P
     let ragContext = "";
     if (args.rag) ragContext = await retrieveForQuery(args.settings, args.text, emit);
     const useRag = Boolean(ragContext);
+    const baseAppend = buildAppend({ persona, mode: args.mode, skills: skillNotes, useRag, phase: "followup" });
     const r = await runClaudeAgentTurn({
       prompt: useRag ? buildRagFollowupPrompt(ragContext, args.text) : args.text,
       resume: prev?.sessionId,
       settings: args.settings,
-      append: buildAppend({ persona, mode: args.mode, skills: skillNotes, useRag, phase: "followup" }),
+      append: latexAppend ? `${baseAppend}\n\n${latexAppend}` : baseAppend,
       allowedTools: withSkillTool(useRag ? RAG_TOOLS : undefined, skillNotes.length > 0),
       phase: "followup",
       emit,
@@ -581,6 +680,8 @@ export async function followUp(tabId: string, args: FollowUpArgs, emit: Emit): P
     finalText = r.text;
     finalSession = r.sessionId;
   }
+
+  if (args.latex && finalText) finalText = await finishLatex(finalText, args.settings, emit, abort);
 
   sessions.set(tabId, { sessionId: finalSession, abort: undefined, lastAnswer: finalText });
   await persistSessions();
@@ -591,6 +692,9 @@ interface CleanupArgs {
   text: string;
   skills: string[];
   settings: ServerSettings;
+  // When true, `text` is a .tex document: cleanup edits prose only (never the
+  // markup) and the result is recompiled instead of humanized.
+  latex: boolean;
 }
 
 // Polish the supplied answer text (grammar fix + humanize) with the lightweight
@@ -624,7 +728,9 @@ export async function cleanup(tabId: string, args: CleanupArgs, emit: Emit): Pro
       return;
     }
     const out = await runCliTurn(args.settings.engine, {
-      prompt: buildCliCleanupPrompt(text, defaultSystemPrompt),
+      prompt: args.latex
+        ? `${defaultSystemPrompt}\n\n${buildLatexCleanupPrompt(text)}`
+        : buildCliCleanupPrompt(text, defaultSystemPrompt),
       skills: skillNotes,
       phase: "cleanup",
       emit,
@@ -634,18 +740,13 @@ export async function cleanup(tabId: string, args: CleanupArgs, emit: Emit): Pro
     if (out) cleaned = out;
   } else {
     // Lightweight: cleanup model + low reasoning, Skill tool only (no file browsing).
-    const cleanupSettings: ServerSettings = {
-      ...args.settings,
-      model: args.settings.cleanupModel || DEFAULT_CLEANUP_MODEL,
-      effort: "low",
-      engineModels: { ...(args.settings.engineModels ?? {}), claude: args.settings.cleanupModel || DEFAULT_CLEANUP_MODEL },
-      engineReasoning: { ...(args.settings.engineReasoning ?? {}), claude: "low" },
-    };
     const note = buildSkillsNote(skillNotes);
-    const baseAppend = buildCleanupAppend(defaultSystemPrompt, skills.humanizer);
+    const baseAppend = args.latex
+      ? `${defaultSystemPrompt}\n\nCLEANUP PASS (LATEX)\n- Fix grammar and wording in the document's prose only. Keep the document compilable and return ONLY the complete .tex document: no commentary, no fences.`
+      : buildCleanupAppend(defaultSystemPrompt, skills.humanizer);
     const r = await runTurn({
-      prompt: buildCleanupPrompt(text, skills.humanizer),
-      settings: cleanupSettings,
+      prompt: args.latex ? buildLatexCleanupPrompt(text) : buildCleanupPrompt(text, skills.humanizer),
+      settings: cleanupModelSettings(args.settings),
       append: note ? `${baseAppend}\n\n${note}` : baseAppend,
       allowedTools: RAG_TOOLS,
       phase: "cleanup",
@@ -654,6 +755,8 @@ export async function cleanup(tabId: string, args: CleanupArgs, emit: Emit): Pro
     });
     if (r.text) cleaned = r.text;
   }
+
+  if (args.latex && cleaned) cleaned = await finishLatex(cleaned, args.settings, emit, abort);
 
   sessions.set(tabId, { sessionId: prev?.sessionId, abort: undefined, lastAnswer: cleaned });
   emit("done", { text: cleaned, sessionId: prev?.sessionId });
@@ -754,15 +857,10 @@ interface AutoPlaceArgs {
   settings: ServerSettings;
 }
 
-/* Suggests the vault path where generated content belongs. */
-export async function autoPlace(tabId: string, args: AutoPlaceArgs, emit: Emit): Promise<void> {
-  const abort = new AbortController();
-  sessions.set(tabId, { ...sessions.get(tabId), abort });
-
-  emit("phase", { phase: "draft" });
-
-  // Build a simple directory listing of the vault for the agent.
-  const { readdirSync, statSync } = await import("fs");
+// Build a simple indented directory listing of the vault for placement prompts.
+/* Lists vault directories (depth-limited) as prompt-ready text. */
+async function vaultStructure(vaultDir: string): Promise<string> {
+  const { readdirSync } = await import("fs");
   const { join, relative } = await import("path");
   const SKIP = new Set([".git", ".obsidian", "node_modules", ".trash"]);
 
@@ -772,7 +870,7 @@ export async function autoPlace(tabId: string, args: AutoPlaceArgs, emit: Emit):
     try {
       for (const ent of readdirSync(dir, { withFileTypes: true })) {
         if (!ent.isDirectory() || SKIP.has(ent.name)) continue;
-        const rel = relative(args.settings.vaultDir, join(dir, ent.name));
+        const rel = relative(vaultDir, join(dir, ent.name));
         lines.push("  ".repeat(depth) + rel + "/");
         lines.push(...listDirs(join(dir, ent.name), depth + 1));
       }
@@ -780,7 +878,17 @@ export async function autoPlace(tabId: string, args: AutoPlaceArgs, emit: Emit):
     return lines;
   }
 
-  const structure = listDirs(args.settings.vaultDir).join("\n");
+  return listDirs(vaultDir).join("\n");
+}
+
+/* Suggests the vault path where generated content belongs. */
+export async function autoPlace(tabId: string, args: AutoPlaceArgs, emit: Emit): Promise<void> {
+  const abort = new AbortController();
+  sessions.set(tabId, { ...sessions.get(tabId), abort });
+
+  emit("phase", { phase: "draft" });
+
+  const structure = await vaultStructure(args.settings.vaultDir);
 
   const finalText = await runWriterTurn({
     settings: args.settings,
@@ -865,6 +973,41 @@ export async function fillinWrite(tabId: string, args: FillinWriteArgs, emit: Em
   emit("done", { text: finalText });
 }
 
+interface DocProposeArgs {
+  docText: string;
+  focus?: string;
+  settings: ServerSettings;
+}
+
+// Analyze an uploaded document (already text-extracted by agent/documents.ts)
+// and propose vault writes. Returns raw model text on `done`; the client parses
+// the JSON array with the same bracket-extraction used for fill-in scans. Every
+// proposed write still goes through the preview + approval flow before disk.
+/* Proposes vault updates (path, action, content) drawn from an imported document. */
+export async function docPropose(tabId: string, args: DocProposeArgs, emit: Emit): Promise<void> {
+  const abort = new AbortController();
+  sessions.set(tabId, { ...sessions.get(tabId), abort });
+
+  emit("phase", { phase: "draft" });
+
+  const structure = await vaultStructure(args.settings.vaultDir);
+  const context = await gatherVaultContext(args.settings.vaultDir, args.settings.extraDirs ?? []);
+
+  const finalText = await runWriterTurn({
+    settings: args.settings,
+    prompt: buildDocProposePrompt(args.docText, structure, context, args.focus),
+    append: buildWriterAppend(args.settings, "Analyze the imported document and return a JSON array of proposed vault writes."),
+    allowedTools: ["Read", "Grep", "Glob"],
+    phase: "draft",
+    emit,
+    abort,
+  });
+  if (finalText === undefined) return;
+
+  sessions.set(tabId, { ...sessions.get(tabId), abort: undefined });
+  emit("done", { text: finalText });
+}
+
 interface WriteCleanupArgs {
   text: string;
   skills: string[];
@@ -881,13 +1024,7 @@ export async function writeCleanup(tabId: string, args: WriteCleanupArgs, emit: 
   const skillNotes = await resolveSkillNotes(args.settings, args.skills, emit);
   const output = await runWriterTurn({
     settings: args.settings,
-    claudeSettings: {
-      ...args.settings,
-      model: args.settings.cleanupModel || DEFAULT_CLEANUP_MODEL,
-      effort: "low",
-      engineModels: { ...(args.settings.engineModels ?? {}), claude: args.settings.cleanupModel || DEFAULT_CLEANUP_MODEL },
-      engineReasoning: { ...(args.settings.engineReasoning ?? {}), claude: "low" },
-    },
+    claudeSettings: cleanupModelSettings(args.settings),
     prompt: buildWriteCleanupPrompt(args.text),
     skills: skillNotes,
     append: buildWriterAppend(args.settings, "Clean up and format the text into well-structured markdown."),

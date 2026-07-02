@@ -720,7 +720,7 @@ export function SettingsPanel({
                       </div>
                       {skill.note && <div className="notice small">{skill.note}</div>}
                       {skill.id === "humanize" && !skills.humanizer && (
-                        <div className="notice small">humanizer skill not found in ~/.claude/skills or the vault.</div>
+                        <div className="notice small error">humanizer skill not found in ~/.claude/skills or the vault.</div>
                       )}
                     </div>
                   ))}
@@ -741,7 +741,7 @@ export function SettingsPanel({
                   </div>
                   <div className="skills-list">
                     {availableSkills.length === 0 ? (
-                      <div className="notice small">No skills installed yet.</div>
+                      <div className="notice small error">No skills installed yet.</div>
                     ) : shownSkills.length === 0 ? (
                       <div className="notice small">No skills match that search.</div>
                     ) : (

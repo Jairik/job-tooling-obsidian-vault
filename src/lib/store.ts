@@ -15,7 +15,33 @@ import type { FunVariant } from "../../shared/design";
 export type { Engine, TabMode, UrlFetchMethod } from "../../shared/settings";
 
 // Vault Writer sub-modes.
-export type WriteMode = "summarize" | "manual" | "fillin";
+export type WriteMode = "summarize" | "manual" | "fillin" | "document";
+
+// A document uploaded and text-extracted server-side. Only this metadata lives
+// in tab state / localStorage — the extracted text stays on the server keyed by
+// id, so large documents never blow the localStorage quota.
+export interface AttachmentMeta {
+  id: string;
+  name: string;
+  size: number;
+  chars: number;
+  truncated: boolean;
+  // Set client-side when a restore-check finds the server no longer has it.
+  expired?: boolean;
+}
+
+export type DocAction = "create" | "append" | "update";
+
+// One model-proposed vault write derived from an uploaded document. Each is
+// individually reviewed and approved before anything touches disk.
+export interface DocProposal {
+  id: string;
+  targetPath: string;
+  action: DocAction;
+  content: string;
+  rationale: string;
+  status: "pending" | "written" | "rejected";
+}
 
 // An installed skill discovered on disk (user or vault scope). Surfaced in the
 // skill picker and the Settings skills list.
@@ -123,7 +149,7 @@ export function mergeSettings(base: Settings, patch: Partial<Settings>): Setting
   return normalizeSettings(mergeEngineSettings(base, patch));
 }
 
-export type Phase = "idle" | "draft" | "humanize" | "cleanup" | "followup" | "done" | "error";
+export type Phase = "idle" | "draft" | "humanize" | "cleanup" | "followup" | "render" | "done" | "error";
 
 export interface Activity {
   tool: string;
@@ -154,6 +180,16 @@ export interface Tab {
   error?: string;
   overrideEnabled: boolean;
   override?: Settings;
+  // Drafting-mode additional context (extra text field + attached documents)
+  extraContextOpen: boolean;
+  extraContext: string;
+  attachments: AttachmentMeta[];
+  // LaTeX output mode
+  latex: boolean;
+  texSource: string;
+  latexCompileId: string;
+  latexLog: string;
+  latexBusy?: boolean; // transient: a manual recompile is in flight
   // Vault Writer fields
   writeMode: WriteMode;
   writePath: string;
@@ -162,6 +198,8 @@ export interface Tab {
   writeConfirmed: boolean;
   fillinQuestions: FillinQuestion[];
   fillinDir: string;
+  docAttachment?: AttachmentMeta;
+  docProposals: DocProposal[];
 }
 
 // Distinct accent colors that read well on the dark theme.
@@ -287,6 +325,13 @@ export function newTab(existing: Tab[] = [], ragDefault = false, mode: TabMode =
     activity: [],
     phase: "idle",
     overrideEnabled: false,
+    extraContextOpen: false,
+    extraContext: "",
+    attachments: [],
+    latex: false,
+    texSource: "",
+    latexCompileId: "",
+    latexLog: "",
     // Vault Writer defaults
     writeMode: "manual",
     writePath: "",
@@ -295,6 +340,7 @@ export function newTab(existing: Tab[] = [], ragDefault = false, mode: TabMode =
     writeConfirmed: false,
     fillinQuestions: [],
     fillinDir: "",
+    docProposals: [],
   };
 }
 
@@ -311,6 +357,11 @@ export function cloneTabForNewQuestion(source: Tab, existing: Tab[]): Tab {
     rag: source.rag,
     overrideEnabled: source.overrideEnabled,
     override: source.override,
+    // The additional context travels with the job context; latex output stays
+    // a per-question choice and resets with the new tab.
+    extraContextOpen: source.extraContextOpen,
+    extraContext: source.extraContext,
+    attachments: source.attachments,
   };
 }
 
@@ -345,9 +396,18 @@ export function loadTabs(): Tab[] {
         mode: t.mode ?? (t.jobDescription || (t as any).yc ? "job" : "ask"),
         autoNamed: t.autoNamed ?? /^Tab \d+$/.test(t.name),
         phase:
-          t.phase === "draft" || t.phase === "humanize" || t.phase === "cleanup" || t.phase === "followup"
+          t.phase === "draft" || t.phase === "humanize" || t.phase === "cleanup" || t.phase === "followup" || t.phase === "render"
             ? "idle"
             : t.phase,
+        // Backfill additional-context + latex fields for tabs saved earlier.
+        extraContextOpen: t.extraContextOpen ?? false,
+        extraContext: t.extraContext ?? "",
+        attachments: Array.isArray(t.attachments) ? t.attachments : [],
+        latex: t.latex ?? false,
+        texSource: t.texSource ?? "",
+        latexCompileId: t.latexCompileId ?? "",
+        latexLog: t.latexLog ?? "",
+        latexBusy: false,
         // Backfill Vault Writer fields for tabs saved before this feature.
         writeMode: t.writeMode ?? "manual",
         writePath: t.writePath ?? "",
@@ -356,6 +416,7 @@ export function loadTabs(): Tab[] {
         writeConfirmed: t.writeConfirmed ?? false,
         fillinQuestions: t.fillinQuestions ?? [],
         fillinDir: t.fillinDir ?? "",
+        docProposals: Array.isArray(t.docProposals) ? t.docProposals : [],
       }));
     }
   } catch {

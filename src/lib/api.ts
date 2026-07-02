@@ -1,6 +1,6 @@
 // Tiny API client. Streaming endpoints are POST + SSE, so we read the response
 // body manually (EventSource only supports GET).
-import type { SkillInfo, LogEntry, UrlFetchMethod } from "./store";
+import type { SkillInfo, LogEntry, UrlFetchMethod, AttachmentMeta } from "./store";
 import type { UsageResult, UsageTarget } from "../../shared/usage";
 
 export type SSEHandlers = Record<string, (data: any) => void>;
@@ -125,11 +125,42 @@ export const api = {
   /* Vault Writer file browsing, writing, and URL-import endpoints. */
   vaultTree: (vault: string): Promise<any[]> =>
     fetch(`/api/vault/tree?path=${encodeURIComponent(vault)}`).then((r) => r.json()),
-  vaultWrite: (path: string, content: string): Promise<{ ok: boolean; path: string }> =>
+  /* Approval step 1: fetch the target's current state + a one-time write token. */
+  vaultPreview: (
+    path: string
+  ): Promise<{ ok: boolean; path: string; exists: boolean; existingContent: string; tooLarge?: boolean; token: string; error?: string }> =>
+    fetch("/api/vault/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    }).then((r) => r.json()),
+  /* Approval step 2: the token from vaultPreview is required — no token, no write. */
+  vaultWrite: (path: string, content: string, token: string): Promise<{ ok: boolean; path: string; error?: string }> =>
     fetch("/api/vault/write", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path, content }),
+      body: JSON.stringify({ path, content, token }),
+    }).then((r) => r.json()),
+
+  /* Uploads a document; the server extracts its text and returns metadata only. */
+  uploadAttachment: (file: File): Promise<{ ok: boolean; error?: string } & Partial<AttachmentMeta>> => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return fetch("/api/attachments", { method: "POST", body: fd }).then((r) => r.json());
+  },
+  getAttachment: (id: string): Promise<{ ok: boolean } & Partial<AttachmentMeta>> =>
+    fetch(`/api/attachments/${id}`).then((r) => r.json()),
+  deleteAttachment: (id: string): Promise<unknown> =>
+    fetch(`/api/attachments/${id}`, { method: "DELETE" }),
+
+  /* Compiles edited LaTeX source into a fresh PDF. */
+  latexCompile: (
+    tex: string
+  ): Promise<{ ok: boolean; compileId?: string; pdfUrl?: string; error?: string; log?: string; hint?: string }> =>
+    fetch("/api/latex/compile", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tex }),
     }).then((r) => r.json()),
   fetchUrl: (
     url: string,
