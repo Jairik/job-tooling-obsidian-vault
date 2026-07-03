@@ -3,7 +3,7 @@
   "version": "0.1.1",
   "description": "A multi-tab web UI for asking questions about your Obsidian vault with Claude Code, grounded in what the vault actually says.",
   "bin": {
-    "vault-assistant": "./run.sh"
+    "vault-assistant": "run.sh"
   },
   "repository": {
     "type": "git",
