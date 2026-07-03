@@ -53,9 +53,11 @@ jobs:
       # bun sidecar (rpath patch -> segfault, ldd exit 1). Test whether the
       # runner's system patchelf handles bun, and seed the tauri tool cache
       # with upstream linuxdeploy so its newer bundled patchelf is used.
+      # (the sidecar copy doesn't exist until beforeBuildCommand runs, so test
+      # against the runner's own bun install — same official binary)
       - name: Does system patchelf corrupt bun?
         run: |
-          cp src-tauri/binaries/bun-x86_64-unknown-linux-gnu /tmp/bun-patched
+          cp "$(which bun)" /tmp/bun-patched
           patchelf --set-rpath '$ORIGIN/../lib' /tmp/bun-patched
           /tmp/bun-patched --version && echo "system patchelf OK on bun" \
             || echo "::warning::system patchelf ALSO corrupts bun (exit $?)"
