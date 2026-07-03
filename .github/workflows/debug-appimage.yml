@@ -44,57 +44,29 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Tool versions
-        run: |
-          strip --version | head -1
-          patchelf --version
+      # linuxdeploy's bundled patchelf corrupts the bun sidecar (rpath patch
+      # -> ldd exit 1, segfault) while the system patchelf 0.18+ handles it
+      # fine. PATCHELF and NO_STRIP are linuxdeploy's documented overrides for
+      # its bundled patchelf/strip; stripping bun saves nothing anyway.
+      - name: Build with system patchelf, no strip
+        env:
+          PATCHELF: /usr/bin/patchelf
+          NO_STRIP: "true"
+        run: bunx tauri build --verbose
 
-      # Tauri's pinned linuxdeploy bundles an old patchelf that corrupts the
-      # bun sidecar (rpath patch -> segfault, ldd exit 1). Test whether the
-      # runner's system patchelf handles bun, and seed the tauri tool cache
-      # with upstream linuxdeploy so its newer bundled patchelf is used.
-      # (the sidecar copy doesn't exist until beforeBuildCommand runs, so test
-      # against the runner's own bun install — same official binary)
-      - name: Does system patchelf corrupt bun?
+      - name: Verify bundled bun sidecar is intact
         run: |
-          cp "$(which bun)" /tmp/bun-patched
-          patchelf --set-rpath '$ORIGIN/../lib' /tmp/bun-patched
-          /tmp/bun-patched --version && echo "system patchelf OK on bun" \
-            || echo "::warning::system patchelf ALSO corrupts bun (exit $?)"
+          APPDIR="src-tauri/target/release/bundle/appimage/Vault Assistant.AppDir"
+          ldd "$APPDIR/usr/bin/bun"
+          "$APPDIR/usr/bin/bun" --version
+          ls -la src-tauri/target/release/bundle/appimage/
 
-      - name: Seed upstream linuxdeploy into tauri tool cache
-        run: |
-          mkdir -p ~/.cache/tauri
-          curl -fsSL -o ~/.cache/tauri/linuxdeploy-x86_64.AppImage \
-            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          chmod +x ~/.cache/tauri/linuxdeploy-x86_64.AppImage
-
-      - name: Build with verbose bundler output
-        run: |
-          if bunx tauri build --verbose; then
-            echo "BUILD OK without NO_STRIP"
-          else
-            echo "::warning::verbose build failed, retrying with NO_STRIP=true"
-            NO_STRIP=true bunx tauri build --verbose
-            echo "BUILD OK with NO_STRIP=true"
-          fi
-
-      # The bundling failure is `ldd` exiting 1 on the bun sidecar inside the
-      # AppDir; compare it against the pristine binary to see whether
-      # linuxdeploy's patchelf/strip pass corrupted it.
       - name: Autopsy bun sidecar in AppDir
         if: failure()
         run: |
           APPDIR="src-tauri/target/release/bundle/appimage/Vault Assistant.AppDir"
           ls -la "$APPDIR/usr/bin/" || true
-          echo "=== AppDir bun ==="
           file "$APPDIR/usr/bin/bun" || true
           ldd "$APPDIR/usr/bin/bun" || echo "ldd on AppDir bun exited: $?"
-          readelf -d "$APPDIR/usr/bin/bun" | head -25 || true
-          echo "=== pristine bun ==="
-          file src-tauri/binaries/bun-x86_64-unknown-linux-gnu
-          ldd src-tauri/binaries/bun-x86_64-unknown-linux-gnu || echo "ldd on pristine bun exited: $?"
-          echo "=== checksums ==="
           md5sum "$APPDIR/usr/bin/bun" src-tauri/binaries/bun-x86_64-unknown-linux-gnu || true
-          echo "=== does AppDir bun still run? ==="
           "$APPDIR/usr/bin/bun" --version || echo "AppDir bun exited: $?"
