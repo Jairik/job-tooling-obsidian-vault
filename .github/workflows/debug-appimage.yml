@@ -58,3 +58,23 @@ jobs:
             NO_STRIP=true bunx tauri build --verbose
             echo "BUILD OK with NO_STRIP=true"
           fi
+
+      # The bundling failure is `ldd` exiting 1 on the bun sidecar inside the
+      # AppDir; compare it against the pristine binary to see whether
+      # linuxdeploy's patchelf/strip pass corrupted it.
+      - name: Autopsy bun sidecar in AppDir
+        if: failure()
+        run: |
+          APPDIR="src-tauri/target/release/bundle/appimage/Vault Assistant.AppDir"
+          ls -la "$APPDIR/usr/bin/" || true
+          echo "=== AppDir bun ==="
+          file "$APPDIR/usr/bin/bun" || true
+          ldd "$APPDIR/usr/bin/bun" || echo "ldd on AppDir bun exited: $?"
+          readelf -d "$APPDIR/usr/bin/bun" | head -25 || true
+          echo "=== pristine bun ==="
+          file src-tauri/binaries/bun-x86_64-unknown-linux-gnu
+          ldd src-tauri/binaries/bun-x86_64-unknown-linux-gnu || echo "ldd on pristine bun exited: $?"
+          echo "=== checksums ==="
+          md5sum "$APPDIR/usr/bin/bun" src-tauri/binaries/bun-x86_64-unknown-linux-gnu || true
+          echo "=== does AppDir bun still run? ==="
+          "$APPDIR/usr/bin/bun" --version || echo "AppDir bun exited: $?"
