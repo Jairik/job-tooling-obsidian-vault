@@ -1147,6 +1147,7 @@ Output tokens: 2,345
   test("release workflow publishes npm package and Tauri release artifacts from main when version is new", async () => {
     const rootPath = join(__dirname, "..");
     const workflow = await Bun.file(join(rootPath, ".github", "workflows", "release.yml")).text();
+    const packageJson = await Bun.file(join(rootPath, "package.json")).json();
 
     expect(workflow).toContain("push:\n    branches: [main]");
     expect(workflow).toContain("release-info:");
@@ -1182,10 +1183,14 @@ Output tokens: 2,345
     expect(workflow).toContain("if: needs.release-info.outputs.npm_exists == 'false'");
     expect(workflow).toContain("NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}");
     expect(workflow).toContain('printf "//registry.npmjs.org/:_authToken=%s\\n" "$NODE_AUTH_TOKEN" > ~/.npmrc');
-    expect(workflow).toContain("bun publish --access public");
+    expect(workflow).toContain("npm publish --access public");
+    expect(workflow).not.toContain("bun publish");
     expect(workflow).not.toContain("NPM_ACCESS_TOKEN");
     expect(workflow).not.toContain("actions/deploy-pages");
     expect(workflow).not.toContain('tags:\n      - "v*.*.*"');
+
+    expect(packageJson.bin).toEqual({ "vault-assistant": "run.sh" });
+    expect(packageJson.files).toContain("run.sh");
   });
 
   test("bundled skill creator guide loads without a source-tree file lookup", async () => {
