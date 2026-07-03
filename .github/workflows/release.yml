@@ -95,6 +95,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # The bundle targets are deb+rpm only: AppImage is not buildable for
+      # this app because linuxdeploy patchelf-corrupts the bun-compiled
+      # binaries it ships (bun sidecar, claude SDK CLI).
       - name: Build Tauri app and publish GitHub Release
         uses: tauri-apps/tauri-action@v0
         env:
