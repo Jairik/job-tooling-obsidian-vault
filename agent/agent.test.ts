@@ -1099,7 +1099,7 @@ Output tokens: 2,345
     expect(workflowMd).toContain("must be accompanied by a test");
   });
 
-  test("docs workflow deploys a Pages artifact without pushing to main", async () => {
+  test("docs workflow deploys the website to GitHub Pages without pushing built docs", async () => {
     const rootPath = join(__dirname, "..");
     const workflow = await Bun.file(join(rootPath, ".github", "workflows", "docs.yml")).text();
 
@@ -1121,6 +1121,28 @@ Output tokens: 2,345
     expect(workflow).not.toContain("contents: write");
     expect(workflow).not.toContain("git commit");
     expect(workflow).not.toMatch(/\bgit\s+push\b/);
+    expect(workflow).not.toContain("bun publish");
+    expect(workflow).not.toContain("tauri-apps/tauri-action");
+  });
+
+  test("release workflow publishes npm package and Tauri release artifacts from version tags", async () => {
+    const rootPath = join(__dirname, "..");
+    const workflow = await Bun.file(join(rootPath, ".github", "workflows", "release.yml")).text();
+
+    expect(workflow).toContain('tags:\n      - "v*.*.*"');
+    expect(workflow).toContain("build-tauri:");
+    expect(workflow).toContain("tauri-apps/tauri-action@v0");
+    expect(workflow).toContain("GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}");
+    expect(workflow).toContain("tagName: ${{ github.ref_name }}");
+    expect(workflow).toContain("releaseName: \"Vault Assistant ${{ github.ref_name }}\"");
+    expect(workflow).toContain("contents: write");
+
+    expect(workflow).toContain("publish-npm:");
+    expect(workflow).toContain("NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}");
+    expect(workflow).toContain('printf "//registry.npmjs.org/:_authToken=%s\\n" "$NODE_AUTH_TOKEN" > ~/.npmrc');
+    expect(workflow).toContain("bun publish --access public");
+    expect(workflow).not.toContain("NPM_ACCESS_TOKEN");
+    expect(workflow).not.toContain("actions/deploy-pages");
   });
 
   test("bundled skill creator guide loads without a source-tree file lookup", async () => {
