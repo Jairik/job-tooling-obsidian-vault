@@ -3,12 +3,6 @@ name: Build and deploy docs
 on:
   push:
     branches: [main]
-    paths:
-      - 'website/**'
-      - 'docs/index.html'
-      - 'docs/assets/**'
-      - 'docs/legacy/**'
-      - '.github/workflows/docs.yml'
   workflow_dispatch: {}
 
 permissions:
