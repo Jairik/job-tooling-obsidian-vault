@@ -25,6 +25,15 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Check release versions match
+        run: |
+          VERSION="$(jq -r .version package.json)"
+          TAURI_VERSION="$(jq -r .version src-tauri/tauri.conf.json)"
+          if [ "$VERSION" != "$TAURI_VERSION" ]; then
+            echo "::error::package.json version $VERSION does not match src-tauri/tauri.conf.json version $TAURI_VERSION"
+            exit 1
+          fi
+
       - name: Type check
         run: bunx tsc --noEmit
 

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vault Assistant</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --fg: #1a1a1a;
+        --muted: #6b7280;
+        --bg: #f7f7f8;
+        --accent: #7c5cff;
+        --err: #b91c1c;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #ededf0;
+          --muted: #9ca3af;
+          --bg: #17171c;
+          --err: #f87171;
+        }
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      .wrap {
+        text-align: center;
+        padding: 2rem;
+        max-width: 32rem;
+      }
+      .spinner {
+        width: 2.5rem;
+        height: 2.5rem;
+        margin: 0 auto 1.25rem;
+        border: 3px solid color-mix(in srgb, var(--accent) 25%, transparent);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 0.9s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      h1 {
+        font-size: 1.1rem;
+        font-weight: 600;
+        margin: 0 0 0.35rem;
+      }
+      .msg {
+        color: var(--muted);
+        font-size: 0.9rem;
+        margin: 0;
+      }
+      #err {
+        display: none;
+        color: var(--err);
+        font-size: 0.9rem;
+        line-height: 1.5;
+        margin: 0;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="spinner"></div>
+      <h1>Vault Assistant</h1>
+      <p class="msg">Starting the backend&hellip;</p>
+      <p id="err"></p>
+    </div>
+  </body>
+</html>

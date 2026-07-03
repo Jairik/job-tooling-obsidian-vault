@@ -1165,6 +1165,12 @@ Output tokens: 2,345
     expect(workflow).toContain("tagName: ${{ needs.release-info.outputs.tag }}");
     expect(workflow).toContain("releaseName: \"Vault Assistant ${{ needs.release-info.outputs.tag }}\"");
     expect(workflow).toContain("contents: write");
+    // No appindicator package at all: the tray-icon feature is off, and the
+    // ayatana / non-ayatana appindicator dev packages conflict in apt.
+    expect(workflow).not.toContain("libayatana-appindicator3-dev");
+    expect(workflow).not.toContain("libappindicator3-dev");
+    expect(workflow).toContain("libwebkit2gtk-4.1-dev");
+    expect(workflow).toContain("libgtk-3-dev");
 
     expect(workflow).toContain("publish-npm:");
     expect(workflow).toContain("if: needs.release-info.outputs.npm_exists == 'false'");
