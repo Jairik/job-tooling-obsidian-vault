@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 # One-command launcher for Vault Assistant.
 set -euo pipefail
-cd "$(dirname "$0")"
+# Resolve the directory of this script, resolving symlinks
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
+cd "$DIR"
 
 if ! command -v bun >/dev/null 2>&1; then
   echo "Bun is required. Install it from https://bun.sh and re-run." >&2
@@ -16,18 +24,22 @@ export PORT
 
 if [ "${1:-}" = "--tui" ]; then
   shift
-  echo "Installing dependencies..."
-  bun install
-  echo ""
+  if [ ! -d node_modules ]; then
+    echo "Installing dependencies..."
+    bun install
+    echo ""
+  fi
   echo "Vault Assistant TUI starting..."
   echo ""
   exec bun run tui -- "$@"
 fi
 
-echo "Installing dependencies..."
-bun install
+if [ ! -d node_modules ]; then
+  echo "Installing dependencies..."
+  bun install
+  echo ""
+fi
 
-echo ""
 echo "Vault Assistant starting on http://localhost:${PORT}"
 echo "Press Ctrl+C to stop."
 echo ""

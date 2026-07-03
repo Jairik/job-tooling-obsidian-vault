@@ -11,6 +11,10 @@ job-application answer.
 
 ## Run it
 
+### Local Development / Repository Run
+
+To run it directly from the cloned repository:
+
 ```bash
 ./run.sh
 ```
@@ -18,6 +22,28 @@ job-application answer.
 That's it. Open http://localhost:5173.
 
 (Equivalent: `bun install && bun run dev`.)
+
+### Global Installation (CLI)
+
+You can install the package globally using `npm` or `bun`:
+
+```bash
+# From the repository root
+npm install -g .
+# or
+bun install -g .
+```
+
+Once installed globally, you can run Vault Assistant from any directory:
+
+* **Start the Web UI & server**:
+  ```bash
+  vault-assistant
+  ```
+* **Start the Terminal UI (TUI)**:
+  ```bash
+  vault-assistant --tui
+  ```
 
 To change ports, add a local `.env` file:
 
