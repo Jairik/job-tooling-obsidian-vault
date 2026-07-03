@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
 
 concurrency:
   group: docs-build-deploy
@@ -15,9 +17,6 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      DOCS_BUILD: ${{ runner.temp }}/docusaurus-build
-      PAGES_STAGE: ${{ runner.temp }}/pages
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,16 +32,20 @@ jobs:
 
       - name: Build Docusaurus site
         working-directory: website
-        run: bun docusaurus build --out-dir "$DOCS_BUILD"
+        run: bun docusaurus build --out-dir "${{ runner.temp }}/docusaurus-build"
 
       - name: Stage Pages artifact
         run: |
+          DOCS_BUILD="${{ runner.temp }}/docusaurus-build"
+          PAGES_STAGE="${{ runner.temp }}/pages"
           rm -rf "$PAGES_STAGE"
           mkdir -p "$PAGES_STAGE/docs"
           cp docs/index.html "$PAGES_STAGE/index.html"
           cp -R docs/assets "$PAGES_STAGE/assets"
           cp -R docs/legacy "$PAGES_STAGE/legacy"
           cp -R "$DOCS_BUILD"/. "$PAGES_STAGE/docs/"
+          touch "$PAGES_STAGE/.nojekyll"
+          echo "PAGES_STAGE=$PAGES_STAGE" >> "$GITHUB_ENV"
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
