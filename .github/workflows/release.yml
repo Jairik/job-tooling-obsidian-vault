@@ -109,6 +109,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: release-info
     if: needs.release-info.outputs.npm_exists == 'false'
+    # NPM_TOKEN is an environment secret; it is only injected into jobs that
+    # declare this environment.
+    environment: npm-release
     permissions:
       contents: read
     steps:
