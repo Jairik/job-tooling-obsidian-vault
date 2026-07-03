@@ -1,6 +1,8 @@
-# Temporary diagnostic workflow: reproduces the release build-tauri job with
-# verbose output so linuxdeploy's stderr (swallowed by the release build) is
-# visible. Delete once the AppImage bundling failure is fixed.
+# Temporary diagnostic workflow: reproduces the release build-tauri job.
+# AppImage bundling is unfixable for this app (linuxdeploy rpath-patches every
+# ELF it finds, and patchelf — bundled or system — corrupts the bun-compiled
+# claude SDK binary shipped in resources). Validate deb+rpm as the release
+# bundle formats instead. Delete once release.yml is settled.
 name: Debug AppImage bundling
 
 on:
@@ -44,29 +46,16 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # linuxdeploy's bundled patchelf corrupts the bun sidecar (rpath patch
-      # -> ldd exit 1, segfault) while the system patchelf 0.18+ handles it
-      # fine. PATCHELF and NO_STRIP are linuxdeploy's documented overrides for
-      # its bundled patchelf/strip; stripping bun saves nothing anyway.
-      - name: Build with system patchelf, no strip
-        env:
-          PATCHELF: /usr/bin/patchelf
-          NO_STRIP: "true"
-        run: bunx tauri build --verbose
+      - name: Build deb and rpm bundles
+        run: bunx tauri build --verbose --bundles deb,rpm
 
-      - name: Verify bundled bun sidecar is intact
+      - name: Verify packaged binaries are intact
         run: |
-          APPDIR="src-tauri/target/release/bundle/appimage/Vault Assistant.AppDir"
-          ldd "$APPDIR/usr/bin/bun"
-          "$APPDIR/usr/bin/bun" --version
-          ls -la src-tauri/target/release/bundle/appimage/
-
-      - name: Autopsy bun sidecar in AppDir
-        if: failure()
-        run: |
-          APPDIR="src-tauri/target/release/bundle/appimage/Vault Assistant.AppDir"
-          ls -la "$APPDIR/usr/bin/" || true
-          file "$APPDIR/usr/bin/bun" || true
-          ldd "$APPDIR/usr/bin/bun" || echo "ldd on AppDir bun exited: $?"
-          md5sum "$APPDIR/usr/bin/bun" src-tauri/binaries/bun-x86_64-unknown-linux-gnu || true
-          "$APPDIR/usr/bin/bun" --version || echo "AppDir bun exited: $?"
+          ls -la src-tauri/target/release/bundle/deb/ src-tauri/target/release/bundle/rpm/
+          DEB="$(ls src-tauri/target/release/bundle/deb/*.deb)"
+          EXTRACT=/tmp/deb-extract
+          dpkg-deb -x "$DEB" "$EXTRACT"
+          find "$EXTRACT" -type f -name bun -o -type f -name claude | head
+          "$EXTRACT/usr/bin/bun" --version
+          "$EXTRACT/usr/lib/Vault Assistant/app/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude" --version || \
+            find "$EXTRACT" -name claude -type f -exec {} --version \;
