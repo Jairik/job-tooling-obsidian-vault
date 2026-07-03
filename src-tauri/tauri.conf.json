@@ -28,7 +28,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["appimage", "deb"],
+    "targets": ["deb", "rpm"],
     "externalBin": ["binaries/bun"],
     "resources": {
       "app/**/*": "app/"
@@ -40,10 +40,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "linux": {
-      "appimage": {
-        "bundleMediaFramework": false
-      }
-    }
+    "linux": {}
   }
 }

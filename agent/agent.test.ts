@@ -1171,6 +1171,12 @@ Output tokens: 2,345
     expect(workflow).not.toContain("libappindicator3-dev");
     expect(workflow).toContain("libwebkit2gtk-4.1-dev");
     expect(workflow).toContain("libgtk-3-dev");
+    // AppImage must stay out of the bundle targets: linuxdeploy rpath-patches
+    // every ELF with patchelf, which corrupts the bun-compiled binaries the
+    // app ships (bun sidecar, claude SDK CLI) — the bundle aborts, and even a
+    // successful one would segfault at runtime. deb/rpm copy files verbatim.
+    const tauriConf = await Bun.file(join(rootPath, "src-tauri", "tauri.conf.json")).json();
+    expect(tauriConf.bundle.targets).toEqual(["deb", "rpm"]);
 
     expect(workflow).toContain("publish-npm:");
     expect(workflow).toContain("if: needs.release-info.outputs.npm_exists == 'false'");
