@@ -49,6 +49,24 @@ jobs:
           strip --version | head -1
           patchelf --version
 
+      # Tauri's pinned linuxdeploy bundles an old patchelf that corrupts the
+      # bun sidecar (rpath patch -> segfault, ldd exit 1). Test whether the
+      # runner's system patchelf handles bun, and seed the tauri tool cache
+      # with upstream linuxdeploy so its newer bundled patchelf is used.
+      - name: Does system patchelf corrupt bun?
+        run: |
+          cp src-tauri/binaries/bun-x86_64-unknown-linux-gnu /tmp/bun-patched
+          patchelf --set-rpath '$ORIGIN/../lib' /tmp/bun-patched
+          /tmp/bun-patched --version && echo "system patchelf OK on bun" \
+            || echo "::warning::system patchelf ALSO corrupts bun (exit $?)"
+
+      - name: Seed upstream linuxdeploy into tauri tool cache
+        run: |
+          mkdir -p ~/.cache/tauri
+          curl -fsSL -o ~/.cache/tauri/linuxdeploy-x86_64.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x ~/.cache/tauri/linuxdeploy-x86_64.AppImage
+
       - name: Build with verbose bundler output
         run: |
           if bunx tauri build --verbose; then
