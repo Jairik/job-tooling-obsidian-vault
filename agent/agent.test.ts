@@ -1144,7 +1144,7 @@ Output tokens: 2,345
     expect(workflow).not.toContain("paths:");
   });
 
-  test("release workflow publishes npm package and Tauri release artifacts from main when version is new", async () => {
+  test("release workflow stages npm package and publishes Tauri release artifacts from main when version is new", async () => {
     const rootPath = join(__dirname, "..");
     const workflow = await Bun.file(join(rootPath, ".github", "workflows", "release.yml")).text();
     const packageJson = await Bun.file(join(rootPath, "package.json")).json();
@@ -1179,11 +1179,16 @@ Output tokens: 2,345
     const tauriConf = await Bun.file(join(rootPath, "src-tauri", "tauri.conf.json")).json();
     expect(tauriConf.bundle.targets).toEqual(["deb", "rpm"]);
 
-    expect(workflow).toContain("publish-npm:");
+    expect(workflow).toContain("stage-npm:");
+    expect(workflow).not.toContain("publish-npm:");
     expect(workflow).toContain("if: needs.release-info.outputs.npm_exists == 'false'");
     expect(workflow).toContain("NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}");
+    expect(workflow).toContain("actions/setup-node@v4");
+    expect(workflow).toContain('node-version: "24"');
+    expect(workflow).toContain("npm install -g npm@^11.15.0");
     expect(workflow).toContain('printf "//registry.npmjs.org/:_authToken=%s\\n" "$NODE_AUTH_TOKEN" > ~/.npmrc');
-    expect(workflow).toContain("npm publish --access public");
+    expect(workflow).toContain("npm stage publish --access public");
+    expect(workflow).not.toContain("\n          npm publish --access public");
     expect(workflow).not.toContain("bun publish");
     expect(workflow).not.toContain("NPM_ACCESS_TOKEN");
     expect(workflow).not.toContain("actions/deploy-pages");
