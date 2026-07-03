@@ -1160,6 +1160,8 @@ Output tokens: 2,345
     expect(workflow).toContain("tagName: ${{ needs.release-info.outputs.tag }}");
     expect(workflow).toContain("releaseName: \"Vault Assistant ${{ needs.release-info.outputs.tag }}\"");
     expect(workflow).toContain("contents: write");
+    expect(workflow).toContain("libayatana-appindicator3-dev");
+    expect(workflow).not.toContain("libappindicator3-dev");
 
     expect(workflow).toContain("publish-npm:");
     expect(workflow).toContain("if: needs.release-info.outputs.npm_exists == 'false'");
