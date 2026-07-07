@@ -1,6 +1,6 @@
 {
   "name": "@jairik/vault-assistant",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "A multi-tab UI for interacting with your Obsidian vault using installed CLI agents, grounded in what the vault actually says.",
   "bin": {
     "vault-assistant": "run.sh"

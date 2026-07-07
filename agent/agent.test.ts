@@ -1173,12 +1173,54 @@ Output tokens: 2,345
     expect(workflow).not.toContain("libappindicator3-dev");
     expect(workflow).toContain("libwebkit2gtk-4.1-dev");
     expect(workflow).toContain("libgtk-3-dev");
-    // AppImage must stay out of the bundle targets: linuxdeploy rpath-patches
-    // every ELF with patchelf, which corrupts the bun-compiled binaries the
-    // app ships (bun sidecar, claude SDK CLI) — the bundle aborts, and even a
-    // successful one would segfault at runtime. deb/rpm copy files verbatim.
+    // Base bundle targets stay deb+rpm (they copy files verbatim), so local
+    // Linux builds never touch AppImage: linuxdeploy rpath-patches every ELF
+    // with patchelf, which corrupts the bun-compiled binaries the app ships
+    // (bun sidecar, claude SDK CLI). CI builds the AppImage separately with
+    // the system-patchelf override and repairs it before upload. macOS and
+    // Windows targets live in Tauri v2 platform merge configs.
     const tauriConf = await Bun.file(join(rootPath, "src-tauri", "tauri.conf.json")).json();
     expect(tauriConf.bundle.targets).toEqual(["deb", "rpm"]);
+    const macConf = await Bun.file(join(rootPath, "src-tauri", "tauri.macos.conf.json")).json();
+    expect(macConf.bundle.targets).toEqual(["app", "dmg"]);
+    const winConf = await Bun.file(join(rootPath, "src-tauri", "tauri.windows.conf.json")).json();
+    expect(winConf.bundle.targets).toEqual(["msi", "nsis"]);
+
+    // The desktop build fans out across all supported platforms and uploads
+    // into the draft release pre-created by release-info (no create race).
+    expect(workflow).toContain("strategy:");
+    expect(workflow).toContain("fail-fast: false");
+    expect(workflow).toContain("runs-on: ${{ matrix.os }}");
+    expect(workflow).toContain("- os: ubuntu-latest");
+    expect(workflow).toContain("- os: macos-latest");
+    expect(workflow).toContain("- os: macos-15-intel");
+    expect(workflow).toContain("- os: windows-latest");
+    expect(workflow).toContain("if: runner.os == 'Linux'");
+
+    // The release stays a draft until every leg uploads: a failed build
+    // leaves only a replaceable draft, never a half-populated public release,
+    // and retrying the same version still runs build-tauri.
+    expect(workflow).toContain('gh release create "${{ steps.info.outputs.tag }}"');
+    expect(workflow).toContain("--draft \\");
+    expect(workflow).toContain("--json isDraft");
+    expect(workflow).toContain("releaseDraft: true");
+    expect(workflow).not.toContain("releaseDraft: false");
+    expect(workflow).toContain("publish-release:");
+    expect(workflow).toContain("needs: [release-info, build-tauri]");
+    expect(workflow).toContain('gh release edit "${{ needs.release-info.outputs.tag }}" --draft=false');
+
+    // AppImage: built with the system patchelf so bundling completes, then
+    // repaired (pristine bun sidecar + resources restored) before upload.
+    expect(workflow).toContain("PATCHELF: /usr/bin/patchelf");
+    expect(workflow).toContain("bunx tauri build --bundles appimage");
+    expect(workflow).toContain("repair-appimage.sh");
+    expect(workflow).toContain("gh release upload");
+    expect(workflow).toContain("--clobber");
+
+    // Apple signing stays dormant until the secrets exist; only non-empty
+    // values are exported into the build environment.
+    expect(workflow).toContain("APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}");
+    expect(workflow).toContain("APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}");
 
     expect(workflow).toContain("stage-npm:");
     expect(workflow).not.toContain("publish-npm:");
@@ -1228,6 +1270,23 @@ Output tokens: 2,345
     expect(tauriShell).toContain('"server.js"');
     expect(tauriShell).toContain("cfg!(debug_assertions)");
     expect(tauriShell).toContain(".env(\"PORT\"");
+    // Windows passes PATH through untouched; Unix keeps the ':' joined dirs.
+    expect(tauriShell).toContain("#[cfg(windows)]");
+    expect(tauriShell).toContain('parts.join(":")');
+
+    // The sidecar copy step must name Windows sidecars binaries/bun-<triple>.exe.
+    const prepareScript = await Bun.file(join(rootPath, "src-tauri", "scripts", "prepare-sidecar.sh")).text();
+    expect(prepareScript).toContain('*-windows-*) EXT=".exe"');
+    expect(prepareScript).toContain("binaries/bun-${TRIPLE}${EXT}");
+
+    // The AppImage repair script restores the pristine bun sidecar and staged
+    // resources over linuxdeploy's patchelf-mangled copies, then repacks.
+    const repairScript = await Bun.file(join(rootPath, "src-tauri", "scripts", "repair-appimage.sh")).text();
+    expect(repairScript).toContain("--appimage-extract");
+    expect(repairScript).toContain("usr/bin/bun");
+    expect(repairScript).toContain("usr/lib/Vault Assistant/app");
+    expect(repairScript).toContain("claude-agent-sdk-linux-x64/claude");
+    expect(repairScript).toContain("appimagetool");
   });
 
   test("Dockerfile supports web and TUI container runs", async () => {

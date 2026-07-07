@@ -7,16 +7,26 @@ set -euo pipefail
 cd "$(dirname "$0")/.."   # -> src-tauri
 
 TRIPLE="$(rustc -Vv | awk '/^host:/ { print $2 }')"
+# Tauri resolves a Windows sidecar as binaries/bun-<triple>.exe.
+EXT=""
+case "$TRIPLE" in
+  *-windows-*) EXT=".exe" ;;
+esac
+
 BUN="$(command -v bun || true)"
 if [ -z "$BUN" ]; then
   echo "error: bun not found on PATH — install it from https://bun.sh" >&2
   exit 1
 fi
+# Git Bash can report the resolved path without its real .exe suffix.
+if [ ! -f "$BUN" ] && [ -f "${BUN}.exe" ]; then
+  BUN="${BUN}.exe"
+fi
 
 mkdir -p binaries
-cp -f "$BUN" "binaries/bun-${TRIPLE}"
-chmod +x "binaries/bun-${TRIPLE}"
-echo "Prepared sidecar: binaries/bun-${TRIPLE}"
+cp -f "$BUN" "binaries/bun-${TRIPLE}${EXT}"
+chmod +x "binaries/bun-${TRIPLE}${EXT}"
+echo "Prepared sidecar: binaries/bun-${TRIPLE}${EXT}"
 
 # The tauri.conf.json `resources` glob (app/**/*) is validated at compile time, but
 # the real app tree is only staged by stage-app.sh for `tauri build`. In dev the
