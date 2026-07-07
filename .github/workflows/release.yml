@@ -97,8 +97,6 @@ jobs:
           # Intel (x86_64-apple-darwin): .app + .dmg. Last x86_64 macOS image
           # GitHub offers; retires August 2027.
           - os: macos-15-intel
-          # Windows x64: .msi (WiX) + NSIS setup .exe
-          - os: windows-latest
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -156,8 +154,8 @@ jobs:
           done
 
       # Per-platform bundle targets come from tauri.conf.json (deb+rpm) merged
-      # with tauri.macos.conf.json (app+dmg) / tauri.windows.conf.json
-      # (msi+nsis). AppImage stays out of the Linux targets: linuxdeploy
+      # with tauri.macos.conf.json (app+dmg). AppImage stays out of the Linux
+      # targets: linuxdeploy
       # patchelf-corrupts the bun-compiled binaries this app ships, so the
       # AppImage is built and repaired separately below.
       - name: Build Tauri app and upload release artifacts
