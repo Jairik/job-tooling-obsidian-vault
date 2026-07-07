@@ -40,7 +40,7 @@ export function dataDir(): string {
 
   const fallback = xdgDataDir();
   try {
-    mkdirSync(fallback, { recursive: true });
+    mkdirSync(fallback, { recursive: true, mode: 0o700 });
   } catch {
     /* best effort — the first real write will surface its own clear error */
   }
