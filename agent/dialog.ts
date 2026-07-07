@@ -3,31 +3,7 @@ export async function showDirectoryPicker(options: { title?: string; defaultPath
   const title = options.title || "Select Directory";
   const defaultPath = options.defaultPath || "";
 
-  if (process.platform === "win32") {
-    const args = [
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      `
-      Add-Type -AssemblyName System.Windows.Forms;
-      $dialog = New-Object System.Windows.Forms.FolderBrowserDialog;
-      $dialog.Description = '${title.replace(/'/g, "''")}';
-      if ('${defaultPath}') { $dialog.SelectedPath = '${defaultPath.replace(/'/g, "''")}' }
-      if ($dialog.ShowDialog() -eq 'OK') {
-        Write-Output $dialog.SelectedPath
-      }
-      `
-    ];
-    try {
-      const proc = Bun.spawn(["powershell.exe", ...args], { stdout: "pipe" });
-      const out = await new Response(proc.stdout).text();
-      await proc.exited;
-      return out.trim() || null;
-    } catch (e) {
-      console.error("Failed to run powershell directory picker", e);
-      return null;
-    }
-  } else if (process.platform === "darwin") {
+  if (process.platform === "darwin") {
     let prompt = `with prompt "${title.replace(/"/g, '\\"')}"`;
     let defaultLocation = "";
     if (defaultPath) {

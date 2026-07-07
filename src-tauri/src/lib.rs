@@ -112,29 +112,20 @@ fn resolve_app_dir(handle: &tauri::AppHandle) -> std::path::PathBuf {
 /// GUI processes inherit a minimal PATH (not your login shell's), so host tools the
 /// agent shells out to — tectonic, opencode, codex, etc. — would be invisible.
 /// Prepend the usual user/tool bin dirs so `Bun.which(...)` can find them.
-/// Windows GUI apps already inherit the user's full registry-backed PATH (joined
-/// with ';'), so there the existing value passes through untouched.
 fn augmented_path() -> String {
-    #[cfg(windows)]
-    {
-        std::env::var("PATH").unwrap_or_default()
+    let mut parts: Vec<String> = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        parts.push(format!("{home}/.local/bin"));
+        parts.push(format!("{home}/.bun/bin"));
+        parts.push(format!("{home}/.cargo/bin"));
     }
-    #[cfg(not(windows))]
-    {
-        let mut parts: Vec<String> = Vec::new();
-        if let Ok(home) = std::env::var("HOME") {
-            parts.push(format!("{home}/.local/bin"));
-            parts.push(format!("{home}/.bun/bin"));
-            parts.push(format!("{home}/.cargo/bin"));
-        }
-        for p in ["/usr/local/bin", "/opt/homebrew/bin", "/usr/bin", "/bin"] {
-            parts.push(p.to_string());
-        }
-        if let Ok(existing) = std::env::var("PATH") {
-            parts.push(existing);
-        }
-        parts.join(":")
+    for p in ["/usr/local/bin", "/opt/homebrew/bin", "/usr/bin", "/bin"] {
+        parts.push(p.to_string());
     }
+    if let Ok(existing) = std::env::var("PATH") {
+        parts.push(existing);
+    }
+    parts.join(":")
 }
 
 /// Reveals the error message baked into the loading page (dist/index.html) when the

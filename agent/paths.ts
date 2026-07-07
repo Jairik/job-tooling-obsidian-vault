@@ -15,9 +15,6 @@ function xdgDataDir(): string {
   if (process.platform === "darwin") {
     return join(homedir(), "Library", "Application Support", "vault-assistant");
   }
-  if (process.platform === "win32") {
-    return join(process.env.APPDATA || join(homedir(), "AppData", "Roaming"), "vault-assistant");
-  }
   return join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "vault-assistant");
 }
 

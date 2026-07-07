@@ -47,8 +47,6 @@ if (platform === "linux") {
   console.log(`@anthropic-ai/claude-agent-sdk-linux-${arch}${isMusl ? "-musl" : ""}`);
 } else if (platform === "darwin") {
   console.log(`@anthropic-ai/claude-agent-sdk-darwin-${arch}`);
-} else if (platform === "win32") {
-  console.log(`@anthropic-ai/claude-agent-sdk-win32-${arch}`);
 } else {
   console.error(`Unsupported Claude Agent SDK platform: ${platform}-${arch}`);
   process.exit(1);

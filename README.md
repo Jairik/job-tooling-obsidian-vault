@@ -59,7 +59,7 @@ next to wherever it's installed. If that install location isn't writable
 (common for a global npm/bun install under a system-managed prefix, e.g. one
 installed with `sudo`), it automatically falls back to a per-user data
 directory (`~/.local/share/vault-assistant` on Linux, `~/Library/Application
-Support/vault-assistant` on macOS, `%APPDATA%\vault-assistant` on Windows).
+Support/vault-assistant` on macOS).
 Set `VA_DATA_DIR` to override this location explicitly.
 
 ### First-run setup
