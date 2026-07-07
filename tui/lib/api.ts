@@ -154,8 +154,18 @@ export const api = {
   meta: (): Promise<MetaResult> => getJson<MetaResult>("/api/meta"),
   engineScan: (): Promise<EngineScanResult> => getJson<EngineScanResult>("/api/engines/scan"),
   getConfig: (): Promise<ServerSettings> => getJson<ServerSettings>("/api/config"),
-  saveConfig: (patch: Partial<ServerSettings>): Promise<ServerSettings> =>
-    postJson<ServerSettings>("/api/config", patch),
+  saveConfig: async (patch: Partial<ServerSettings>): Promise<ServerSettings> => {
+    const res = await fetch(`${BASE}/api/config`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      throw new Error((data && typeof (data as any).error === "string" && (data as any).error) || `Settings save failed (${res.status})`);
+    }
+    return data as ServerSettings;
+  },
   skillStatus: (vault: string): Promise<SkillStatus> =>
     getJson<SkillStatus>(`/api/skills/status?vault=${encodeURIComponent(vault)}`),
   listSkills: (vault: string): Promise<SkillInfo[]> =>

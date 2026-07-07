@@ -109,6 +109,8 @@ export function App() {
   const [skills, setSkills] = useState({ humanizer: false, gemini: false, opencode: false, cursor: false, copilot: false, codex: false });
   const [availableSkills, setAvailableSkills] = useState<SkillInfo[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSaveError, setSettingsSaveError] = useState<string | null>(null);
+  const settingsSaveSeq = useRef(0);
   // When true, the Settings panel opens straight to the Help page (set by the
   // first-run welcome modal's "Explore settings" action).
   const [settingsToHelp, setSettingsToHelp] = useState(false);
@@ -351,12 +353,27 @@ export function App() {
     );
   };
 
-  /* Updates settings optimistically, then persists the small patch to the server. */
+  /* Updates settings optimistically, then persists the small patch to the server.
+     localStorage is only updated once the server confirms the save, so a failed
+     save (e.g. an unwritable config path) doesn't leave localStorage claiming a
+     value that was never actually persisted. Rapid edits (e.g. typing in a text
+     field) fire one save per keystroke; settingsSaveSeq tags each request so an
+     older response that resolves after a newer one is ignored instead of
+     clobbering localStorage/the error banner with stale data. */
   const changeSettings = (patch: Partial<Settings>) => {
     setSettings((prev) => {
       const next = mergeSettings(prev as Settings, patch);
-      saveSettings(next);
-      api.saveConfig(patch).catch(() => {});
+      const seq = ++settingsSaveSeq.current;
+      api.saveConfig(patch)
+        .then(() => {
+          if (seq !== settingsSaveSeq.current) return;
+          saveSettings(next);
+          setSettingsSaveError(null);
+        })
+        .catch((err) => {
+          if (seq !== settingsSaveSeq.current) return;
+          setSettingsSaveError(`Settings could not be saved: ${String(err?.message || err)}`);
+        });
       return next;
     });
   };
@@ -1082,6 +1099,8 @@ export function App() {
           onDensityChange={setDensity}
           onDefaultModeChange={setDefaultMode}
           onChange={changeSettings}
+          saveError={settingsSaveError}
+          onDismissSaveError={() => setSettingsSaveError(null)}
           onDesignChange={changeDesign}
           onCreateSkill={createSkill}
           onRefreshSkills={refreshSkills}

@@ -72,7 +72,8 @@ import {
   buildEngineReasoningPatch,
   mergeTuiSettings,
 } from "../tui/lib/settings";
-import { mkdir, mkdtemp, rm, writeFile } from "fs/promises";
+import { saveUploads, listUploads } from "./uploads";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -1446,6 +1447,51 @@ Output tokens: 2,345
     };
     const attachmentTab = newTab([], false, "ask", "/path/to/my-obsidian-vault", activeTabWithAttachment);
     expect(attachmentTab.name).toBe("File: attachment_file.pdf");
+  });
+
+  test("saveUploads deduplicates names that sanitize to the same string", async () => {
+    const tabId = `uploads-collision-test-${Date.now()}`;
+    const dir = join(tmpdir(), "vault-assistant-uploads", tabId);
+    try {
+      const saved = await saveUploads(tabId, [
+        new File(["first"], "a:b.txt"),
+        new File(["second"], "a?b.txt"),
+        new File(["third"], "a_b.txt"),
+      ]);
+
+      const names = saved.map((s) => s.name);
+      expect(names).toEqual(["a_b.txt", "a_b-2.txt", "a_b-3.txt"]);
+      expect(await Bun.file(join(dir, "a_b.txt")).text()).toBe("first");
+      expect(await Bun.file(join(dir, "a_b-2.txt")).text()).toBe("second");
+      expect(await Bun.file(join(dir, "a_b-3.txt")).text()).toBe("third");
+
+      // A later batch must also avoid names already staged on disk.
+      const more = await saveUploads(tabId, [new File(["fourth"], "a|b.txt")]);
+      expect(more[0].name).toBe("a_b-4.txt");
+      expect((await listUploads(tabId)).map((s) => s.name)).toEqual([
+        "a_b-2.txt",
+        "a_b-3.txt",
+        "a_b-4.txt",
+        "a_b.txt",
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("saveUploads stages files and directories with private permissions on POSIX", async () => {
+    if (process.platform === "win32") return;
+    const tabId = `uploads-perms-test-${Date.now()}`;
+    const dir = join(tmpdir(), "vault-assistant-uploads", tabId);
+    try {
+      const [saved] = await saveUploads(tabId, [new File(["secret"], "doc.txt")]);
+
+      expect((await stat(join(tmpdir(), "vault-assistant-uploads"))).mode & 0o777).toBe(0o700);
+      expect((await stat(dir)).mode & 0o777).toBe(0o700);
+      expect((await stat(join(dir, saved.name))).mode & 0o777).toBe(0o600);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
 });

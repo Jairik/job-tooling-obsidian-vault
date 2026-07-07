@@ -99,7 +99,13 @@ Runtime notes for the packaged app:
 
 - Writable state (`config.json`, `logs/`, `.attachments/`, `.sessions.json`) is
   redirected to the per-user app-data dir via the `VA_DATA_DIR` env var (see
-  `agent/paths.ts`) instead of the repo root.
+  `agent/paths.ts`) instead of the repo root. The global npm/bun CLI install
+  (`vault-assistant` on `PATH`) gets the same guarantee without needing
+  `VA_DATA_DIR` set explicitly: `agent/paths.ts` probes whether its default
+  (the install directory) is writable and falls back to the same kind of
+  per-user XDG-style data directory automatically if not. `VA_DATA_DIR` is
+  still available as an explicit override for all three distribution paths
+  (Tauri, Docker, npm/bun CLI).
 - The optional features above (`tectonic`, Playwright Chromium, alternate engine
   CLIs, SearXNG) remain host dependencies. The shell augments the sidecar's `PATH`
   with the usual user bin dirs so installed tools are found.
