@@ -424,7 +424,15 @@ export function SettingsPanel({
           </div>
 
           {saveError && (
-            <div className="notice small error" onClick={onDismissSaveError}>
+            <div
+              className="notice small error"
+              role="button"
+              tabIndex={0}
+              onClick={onDismissSaveError}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") onDismissSaveError?.();
+              }}
+            >
               {saveError}
             </div>
           )}
