@@ -12,6 +12,8 @@ jobs:
   release-info:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       version: ${{ steps.info.outputs.version }}
       tag: ${{ steps.info.outputs.tag }}
@@ -44,7 +46,10 @@ jobs:
           else
             NPM_EXISTS=false
           fi
-          if gh release view "$TAG" >/dev/null 2>&1; then
+          # Draft releases (leftovers from a failed run) don't count as
+          # released; the create step below replaces them.
+          IS_DRAFT="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null || echo missing)"
+          if [ "$IS_DRAFT" = "false" ]; then
             RELEASE_EXISTS=true
           else
             RELEASE_EXISTS=false
@@ -56,12 +61,45 @@ jobs:
             echo "release_exists=$RELEASE_EXISTS"
           } >> "$GITHUB_OUTPUT"
 
+      # Pre-create the release as a draft so the concurrent build-tauri matrix
+      # legs all upload into one release instead of racing to create it. It
+      # only goes public via publish-release once every leg has uploaded, so a
+      # failed build never strands a half-populated public release — retrying
+      # with the same version just replaces the leftover draft.
+      - name: Create draft GitHub release
+        if: steps.info.outputs.release_exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "$(gh release view "${{ steps.info.outputs.tag }}" --json isDraft --jq .isDraft 2>/dev/null)" = "true" ]; then
+            gh release delete "${{ steps.info.outputs.tag }}" --yes
+          fi
+          gh release create "${{ steps.info.outputs.tag }}" \
+            --draft \
+            --title "Vault Assistant ${{ steps.info.outputs.tag }}" \
+            --target "$GITHUB_SHA" \
+            --notes "Vault Assistant ${{ steps.info.outputs.version }}"
+
   build-tauri:
-    runs-on: ubuntu-latest
     needs: release-info
     if: needs.release-info.outputs.release_exists == 'false'
     permissions:
       contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x64: deb + rpm via tauri-action; AppImage is built and
+          # repaired separately in the trailing Linux-only steps.
+          - os: ubuntu-latest
+          # Apple Silicon (aarch64-apple-darwin): .app + .dmg
+          - os: macos-latest
+          # Intel (x86_64-apple-darwin): .app + .dmg. Last x86_64 macOS image
+          # GitHub offers; retires August 2027.
+          - os: macos-15-intel
+          # Windows x64: .msi (WiX) + NSIS setup .exe
+          - os: windows-latest
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -70,6 +108,7 @@ jobs:
       # feature is off, so nothing links libappindicator), and the ayatana and
       # non-ayatana appindicator packages conflict with each other on apt.
       - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -95,18 +134,83 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # The bundle targets are deb+rpm only: AppImage is not buildable for
-      # this app because linuxdeploy patchelf-corrupts the bun-compiled
-      # binaries it ships (bun sidecar, claude SDK CLI).
-      - name: Build Tauri app and publish GitHub Release
+      # Signing is optional: only non-empty secrets are exported, so this step
+      # is inert until the APPLE_* secrets are configured — adding them later
+      # needs no workflow change. (Passing empty strings straight into
+      # tauri-action's env would trip tauri-bundler's keychain-import path.)
+      - name: Export Apple signing environment
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for key in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            value="${!key}"
+            if [ -n "$value" ]; then
+              { echo "${key}<<__EOF__"; echo "$value"; echo "__EOF__"; } >> "$GITHUB_ENV"
+            fi
+          done
+
+      # Per-platform bundle targets come from tauri.conf.json (deb+rpm) merged
+      # with tauri.macos.conf.json (app+dmg) / tauri.windows.conf.json
+      # (msi+nsis). AppImage stays out of the Linux targets: linuxdeploy
+      # patchelf-corrupts the bun-compiled binaries this app ships, so the
+      # AppImage is built and repaired separately below.
+      - name: Build Tauri app and upload release artifacts
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ needs.release-info.outputs.tag }}
           releaseName: "Vault Assistant ${{ needs.release-info.outputs.tag }}"
-          releaseDraft: false
+          releaseDraft: true
           prerelease: false
+
+      # linuxdeploy's bundled patchelf aborts on bun-compiled binaries; the
+      # system patchelf lets bundling complete, but still corrupts them — the
+      # repair step below restores pristine copies before anything is uploaded.
+      - name: Build AppImage
+        if: runner.os == 'Linux'
+        env:
+          PATCHELF: /usr/bin/patchelf
+          NO_STRIP: "true"
+        run: bunx tauri build --bundles appimage
+
+      - name: Repair and verify AppImage
+        if: runner.os == 'Linux'
+        run: |
+          shopt -s failglob
+          files=(src-tauri/target/release/bundle/appimage/*.AppImage)
+          bash src-tauri/scripts/repair-appimage.sh "${files[0]}"
+
+      - name: Upload AppImage to release
+        if: runner.os == 'Linux'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          shopt -s failglob
+          files=(src-tauri/target/release/bundle/appimage/*.AppImage)
+          gh release upload "${{ needs.release-info.outputs.tag }}" "${files[@]}" --clobber
+
+  # The draft release goes public only after every matrix leg has built and
+  # uploaded its artifacts, so a failed build never publishes a half-release
+  # and re-running with the same version stays possible.
+  publish-release:
+    runs-on: ubuntu-latest
+    needs: [release-info, build-tauri]
+    if: needs.release-info.outputs.release_exists == 'false'
+    permissions:
+      contents: write
+    steps:
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release edit "${{ needs.release-info.outputs.tag }}" --draft=false
 
   stage-npm:
     runs-on: ubuntu-latest
