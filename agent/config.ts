@@ -660,6 +660,10 @@ export async function loadConfig(): Promise<ServerSettings> {
 /* Persists a partial settings update and returns the canonical saved configuration. */
 export async function saveConfig(patch: Partial<ServerSettings>): Promise<ServerSettings> {
   const next = mergeServerSettings(await loadConfig(), patch);
-  await Bun.write(CONFIG_PATH, JSON.stringify(next, null, 2));
+  try {
+    await Bun.write(CONFIG_PATH, JSON.stringify(next, null, 2));
+  } catch (err: any) {
+    throw new Error(`Could not save settings to ${CONFIG_PATH}: ${err?.message || err}`);
+  }
   return next;
 }

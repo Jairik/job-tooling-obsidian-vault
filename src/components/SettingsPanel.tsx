@@ -41,6 +41,8 @@ interface Props {
   onDensityChange: (density: "comfortable" | "compact") => void;
   onDefaultModeChange: (mode: TabMode) => void;
   onChange: (patch: Partial<Settings>) => void;
+  saveError?: string | null;
+  onDismissSaveError?: () => void;
   onDesignChange: (patch: Partial<DesignSettings>) => void;
   onCreateSkill: (payload: { name: string; description: string; body: string; scope: "user" | "vault" }) => Promise<CreateSkillResult>;
   onRefreshSkills: () => void;
@@ -152,6 +154,8 @@ export function SettingsPanel({
   onDensityChange,
   onDefaultModeChange,
   onChange,
+  saveError,
+  onDismissSaveError,
   onDesignChange,
   onCreateSkill,
   onRefreshSkills,
@@ -418,6 +422,12 @@ export function SettingsPanel({
               </svg>
             </button>
           </div>
+
+          {saveError && (
+            <div className="notice small error" onClick={onDismissSaveError}>
+              {saveError}
+            </div>
+          )}
 
           <div className="s-body">
             {/* ── GENERAL ── */}

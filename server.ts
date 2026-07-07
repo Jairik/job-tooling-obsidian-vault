@@ -136,7 +136,11 @@ const serverConfig = {
       GET: async () => Response.json(await loadConfig()),
       POST: async (req) => {
         const patch = await req.json();
-        return Response.json(await saveConfig(patch));
+        try {
+          return Response.json(await saveConfig(patch));
+        } catch (err: any) {
+          return Response.json({ error: String(err?.message || err) }, { status: 500 });
+        }
       },
     },
 

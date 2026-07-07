@@ -54,6 +54,14 @@ PORT=5173
 The app serves the frontend and API from the same Bun process, so one port is
 used for both.
 
+By default, Vault Assistant stores `config.json`, `logs/`, and `.attachments/`
+next to wherever it's installed. If that install location isn't writable
+(common for a global npm/bun install under a system-managed prefix, e.g. one
+installed with `sudo`), it automatically falls back to a per-user data
+directory (`~/.local/share/vault-assistant` on Linux, `~/Library/Application
+Support/vault-assistant` on macOS, `%APPDATA%\vault-assistant` on Windows).
+Set `VA_DATA_DIR` to override this location explicitly.
+
 ### First-run setup
 The first time you open the app (when there's no `config.json` yet) a short setup
 modal asks for your **name**, **role**, **vault path**, and optional **voice notes**,

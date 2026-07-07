@@ -80,6 +80,7 @@ function TuiApp({ server, initialMode }: AppProps) {
   const [screen, setScreen] = useState<Screen>("main");
   const [focusIndex, setFocusIndex] = useState(0);
   const [settings, setSettings] = useState<ServerSettings | null>(null);
+  const settingsSaveSeq = useRef(0);
   const [meta, setMeta] = useState<MetaResult | null>(null);
   const [skills, setSkills] = useState<SkillStatus | null>(null);
   const [availableSkills, setAvailableSkills] = useState<SkillInfo[]>([]);
@@ -140,14 +141,22 @@ function TuiApp({ server, initialMode }: AppProps) {
     setFocusIndex((idx) => Math.min(idx, Math.max(0, focusIds.length - 1)));
   }, [focusIds.length]);
 
+  // settingsSaveSeq tags each save so an older response that resolves after a
+  // newer one (e.g. rapid edits to a text field) is ignored instead of
+  // clobbering the settings state with stale data.
   const changeSettings = (patch: Partial<ServerSettings>) => {
     setSettings((prev) => {
       if (!prev) return prev;
       const next = mergeTuiSettings(prev, patch);
+      const seq = ++settingsSaveSeq.current;
       api.saveConfig(patch).then((saved) => {
+        if (seq !== settingsSaveSeq.current) return;
         setSettings(saved);
         if (patch.vaultDir) refreshSkills(saved.vaultDir);
-      }).catch((err) => setNotice(`Settings save failed: ${String(err?.message || err)}`));
+      }).catch((err) => {
+        if (seq !== settingsSaveSeq.current) return;
+        setNotice(`Settings save failed: ${String(err?.message || err)}`);
+      });
       return next;
     });
   };

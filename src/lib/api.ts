@@ -67,12 +67,18 @@ export const api = {
     fetch("/api/meta").then((r) => r.json()),
   engineScan: (): Promise<EngineScanResult> => fetch("/api/engines/scan").then((r) => r.json()),
   getConfig: (): Promise<any> => fetch("/api/config").then((r) => r.json()),
-  saveConfig: (patch: unknown): Promise<any> =>
-    fetch("/api/config", {
+  saveConfig: async (patch: unknown): Promise<any> => {
+    const res = await fetch("/api/config", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
-    }).then((r) => r.json()),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      throw new Error((data && typeof data.error === "string" && data.error) || `Settings save failed (${res.status})`);
+    }
+    return data;
+  },
   skills: (vault: string): Promise<{ humanizer: boolean; gemini: boolean; opencode: boolean; cursor: boolean; copilot: boolean; codex: boolean }> =>
     fetch(`/api/skills/status?vault=${encodeURIComponent(vault)}`).then((r) => r.json()),
   listSkills: (vault: string): Promise<SkillInfo[]> =>
