@@ -240,9 +240,20 @@ jobs:
       - name: Ensure npm supports staged publishing
         run: npm install -g npm@^11.15.0
 
+      # The npm_exists guard above uses `npm view`, which can't see versions
+      # that are staged but not yet approved, so re-running with the same
+      # version 409s here. Treat that one error as "already staged, nothing
+      # to do"; any other failure (auth, network, validation) is real.
       - name: Stage npm package for approval
+        shell: bash
         run: |
           printf "//registry.npmjs.org/:_authToken=%s\n" "$NODE_AUTH_TOKEN" > ~/.npmrc
-          npm stage publish --access public
+          if npm stage publish --access public 2>&1 | tee stage-publish.log; then
+            exit 0
+          elif grep -q 'Cannot stage previously published version' stage-publish.log; then
+            echo "This version is already staged or published on npm. Skipping."
+          else
+            exit 1
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
