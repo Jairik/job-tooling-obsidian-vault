@@ -80,7 +80,7 @@ Building the desktop app additionally requires:
 - **Rust toolchain** (`cargo`, `rustc`) — install via [rustup](https://rustup.rs).
 - **Tauri Linux system libraries**: `webkit2gtk-4.1`, `gtk3`, `libsoup-3.0`,
   `javascriptcoregtk-4.1` (Arch: `sudo pacman -S webkit2gtk-4.1 gtk3 libsoup3`).
-  macOS needs Xcode command-line tools; Windows needs the WebView2 runtime + MSVC.
+  macOS needs Xcode command-line tools.
 - **Bun on `PATH` at build time**: `src-tauri/scripts/prepare-sidecar.sh` copies the
   host `bun` binary into `src-tauri/binaries/bun-<target-triple>` to ship as the
   sidecar. To cross-build, drop that platform's `bun` binary there first.

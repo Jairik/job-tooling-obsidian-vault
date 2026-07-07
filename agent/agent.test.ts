@@ -1177,14 +1177,14 @@ Output tokens: 2,345
     // Linux builds never touch AppImage: linuxdeploy rpath-patches every ELF
     // with patchelf, which corrupts the bun-compiled binaries the app ships
     // (bun sidecar, claude SDK CLI). CI builds the AppImage separately with
-    // the system-patchelf override and repairs it before upload. macOS and
-    // Windows targets live in Tauri v2 platform merge configs.
+    // the system-patchelf override and repairs it before upload. macOS
+    // targets live in a Tauri v2 platform merge config.
     const tauriConf = await Bun.file(join(rootPath, "src-tauri", "tauri.conf.json")).json();
     expect(tauriConf.bundle.targets).toEqual(["deb", "rpm"]);
     const macConf = await Bun.file(join(rootPath, "src-tauri", "tauri.macos.conf.json")).json();
     expect(macConf.bundle.targets).toEqual(["app", "dmg"]);
-    const winConf = await Bun.file(join(rootPath, "src-tauri", "tauri.windows.conf.json")).json();
-    expect(winConf.bundle.targets).toEqual(["msi", "nsis"]);
+    // Windows is not supported: no Windows merge config, no Windows CI leg.
+    expect(await Bun.file(join(rootPath, "src-tauri", "tauri.windows.conf.json")).exists()).toBe(false);
 
     // The desktop build fans out across all supported platforms and uploads
     // into the draft release pre-created by release-info (no create race).
@@ -1194,7 +1194,7 @@ Output tokens: 2,345
     expect(workflow).toContain("- os: ubuntu-latest");
     expect(workflow).toContain("- os: macos-latest");
     expect(workflow).toContain("- os: macos-15-intel");
-    expect(workflow).toContain("- os: windows-latest");
+    expect(workflow).not.toContain("windows-latest");
     expect(workflow).toContain("if: runner.os == 'Linux'");
 
     // The release stays a draft until every leg uploads: a failed build
@@ -1270,14 +1270,12 @@ Output tokens: 2,345
     expect(tauriShell).toContain('"server.js"');
     expect(tauriShell).toContain("cfg!(debug_assertions)");
     expect(tauriShell).toContain(".env(\"PORT\"");
-    // Windows passes PATH through untouched; Unix keeps the ':' joined dirs.
-    expect(tauriShell).toContain("#[cfg(windows)]");
+    // The sidecar PATH keeps the ':' joined Unix bin dirs.
     expect(tauriShell).toContain('parts.join(":")');
 
-    // The sidecar copy step must name Windows sidecars binaries/bun-<triple>.exe.
+    // The sidecar copy step names the binary binaries/bun-<triple>.
     const prepareScript = await Bun.file(join(rootPath, "src-tauri", "scripts", "prepare-sidecar.sh")).text();
-    expect(prepareScript).toContain('*-windows-*) EXT=".exe"');
-    expect(prepareScript).toContain("binaries/bun-${TRIPLE}${EXT}");
+    expect(prepareScript).toContain("binaries/bun-${TRIPLE}");
 
     // The AppImage repair script restores the pristine bun sidecar and staged
     // resources over linuxdeploy's patchelf-mangled copies, then repacks.
@@ -1463,9 +1461,7 @@ Output tokens: 2,345
 
       expect(mockSpawn.mock.calls.length).toBe(1);
       const callArgs = (mockSpawn.mock.calls as any)[0][0] as string[];
-      if (process.platform === "win32") {
-        expect(callArgs[0]).toBe("powershell.exe");
-      } else if (process.platform === "darwin") {
+      if (process.platform === "darwin") {
         expect(callArgs[0]).toBe("osascript");
       } else {
         expect(callArgs[0]).toBe("zenity");
@@ -1539,7 +1535,6 @@ Output tokens: 2,345
   });
 
   test("saveUploads stages files and directories with private permissions on POSIX", async () => {
-    if (process.platform === "win32") return;
     const tabId = `uploads-perms-test-${Date.now()}`;
     const dir = join(tmpdir(), "vault-assistant-uploads", tabId);
     try {
