@@ -112,6 +112,16 @@ async function startServer(): Promise<OpenCodeServerHandle> {
       // server so the next turn restarts fresh. Any turn still waiting on this
       // session's events falls back on its own watchdog timeout, not on this.
       if (currentHandle === handle) {
+        try {
+          handle.close();
+        } catch {
+          // best-effort cleanup only
+        }
+        try {
+          rmSync(handle.sandboxDir, { recursive: true, force: true });
+        } catch {
+          // best-effort cleanup only
+        }
         serverPromise = null;
         currentHandle = null;
       }
