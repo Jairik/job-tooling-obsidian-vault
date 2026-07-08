@@ -10,13 +10,15 @@ import { tmpdir } from "os";
 import { join, extname } from "path";
 import { effectiveEngineModel, effectiveEngineReasoning, type Engine } from "../shared/settings";
 import { injectSkillsIntoPrompt, type ServerSettings, type SkillNote } from "./config";
-import { cliPathForEngine } from "./engine-scan";
+import { cliPathForEngine, codexSdkAvailable } from "./engine-scan";
+import { ensureOpenCodeServer, onOpenCodeSessionEvent, OPENCODE_DISABLED_TOOLS } from "./opencode-server";
 
 type Emit = (event: string, data: unknown) => void;
 
 /* Reports whether an engine is available on PATH; Claude is handled by its SDK. */
 export function cliAvailable(engine: Engine): boolean {
   if (engine === "claude") return true; // managed via SDK
+  if (engine === "codex" && codexSdkAvailable()) return true;
   return Boolean(cliPathForEngine(engine));
 }
 
@@ -186,11 +188,365 @@ export function buildCliCommand(
   return { cmd, prompt, writeToStdin };
 }
 
+export interface CodexSdkTurnState {
+  sentAgentText: string;
+}
+
+export interface MappedCodexSdkEvent {
+  sessionId?: string;
+  delta?: string;
+  error?: string;
+}
+
+/*
+ * Pure mapper from a Codex SDK ThreadEvent to the same {sessionId, delta, error}
+ * shape the legacy JSONL parser produced above. Unlike the legacy `codex exec
+ * --json` stream (which has a separate `item.delta` event), this SDK's
+ * item.updated/item.completed events carry the *full* accumulated
+ * agent_message text rather than incremental chunks, so deltas are
+ * reconstructed by diffing against the text already sent (tracked in `state`).
+ */
+export function mapCodexSdkEvent(
+  ev: { type: string; thread_id?: string; message?: string; error?: { message: string }; item?: { type: string; text?: string } },
+  state: CodexSdkTurnState
+): MappedCodexSdkEvent {
+  if (ev.type === "thread.started" && ev.thread_id) return { sessionId: ev.thread_id };
+  if (ev.type === "error" && ev.message) return { error: ev.message };
+  if (ev.type === "turn.failed" && ev.error?.message) return { error: ev.error.message };
+  if ((ev.type === "item.updated" || ev.type === "item.completed") && ev.item?.type === "agent_message") {
+    const full = ev.item.text ?? "";
+    if (full.length <= state.sentAgentText.length) return {};
+    const delta = full.slice(state.sentAgentText.length);
+    state.sentAgentText = full;
+    return { delta };
+  }
+  return {};
+}
+
+export interface CodexThreadOptions {
+  workingDirectory: string;
+  sandboxMode: "read-only";
+  skipGitRepoCheck: true;
+  model?: string;
+  modelReasoningEffort?: string;
+}
+
+/* Builds the ThreadOptions passed to both startThread and resumeThread (the SDK applies them identically either way). */
+export function buildCodexThreadOptions(workingDirectory: string, model: string, reasoning: string): CodexThreadOptions {
+  const options: CodexThreadOptions = {
+    workingDirectory,
+    sandboxMode: "read-only",
+    skipGitRepoCheck: true,
+  };
+  if (model) options.model = model;
+  if (reasoning) options.modelReasoningEffort = reasoning;
+  return options;
+}
+
+/* Emitted once per process if the optional Codex SDK dependency is missing. */
+let codexSdkMissingNoticeShown = false;
+
+export function isCodexSdkStartupError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    message.includes("Unable to locate Codex CLI binaries") ||
+    message.includes("Unsupported platform:") ||
+    message.includes("Unsupported target triple:")
+  );
+}
+
+/*
+ * Runs one Codex turn through @openai/codex-sdk instead of hand-parsed
+ * `codex exec --json`. Same sandbox contract as the legacy path: empty temp
+ * cwd, read-only sandbox, prompt over stdio, no vault filesystem access.
+ * Returns null (instead of throwing) when the optional SDK dependency isn't
+ * installed, signaling the caller to fall back to the legacy CLI transport.
+ */
+export async function runCodexSdkTurn(args: CliArgs): Promise<string | null> {
+  let sdk: typeof import("@openai/codex-sdk");
+  try {
+    sdk = await import("@openai/codex-sdk");
+  } catch {
+    if (!codexSdkMissingNoticeShown) {
+      codexSdkMissingNoticeShown = true;
+      args.emit("notice", { message: "Codex SDK not installed; using the codex CLI directly for this turn." });
+    }
+    return null;
+  }
+
+  const settings = args.settings;
+  const model = settings ? effectiveEngineModel(settings, "codex") : "";
+  const reasoning = settings ? effectiveEngineReasoning(settings, "codex") : "";
+  const prompt = withRuntimeHints(injectSkillsIntoPrompt(args.prompt, args.skills), reasoning);
+
+  const work = await mkdtemp(join(tmpdir(), "jas-codex-"));
+  args.emit("activity", { tool: "codex", input: `${args.phase}…` });
+
+  let text = "";
+  try {
+    const codex = new sdk.Codex();
+    const threadOptions = buildCodexThreadOptions(work, model, reasoning);
+
+    const thread = args.resume
+      ? codex.resumeThread(args.resume, threadOptions as any)
+      : codex.startThread(threadOptions as any);
+
+    const { events } = await thread.runStreamed(prompt, { signal: args.abort.signal });
+
+    const state: CodexSdkTurnState = { sentAgentText: "" };
+    for await (const ev of events) {
+      const mapped = mapCodexSdkEvent(ev as any, state);
+      if (mapped.sessionId) args.emit("session", { sessionId: mapped.sessionId });
+      if (mapped.delta) {
+        text += mapped.delta;
+        if (!args.suppressText) args.emit("text", { phase: args.phase, delta: mapped.delta });
+      }
+      if (mapped.error) throw new Error(mapped.error);
+    }
+    return text.trim();
+  } catch (err) {
+    if (args.abort.signal.aborted) return text.trim();
+    if (!text && isCodexSdkStartupError(err)) {
+      // Nothing streamed yet: the SDK's own bundled binary likely isn't resolvable
+      // (e.g. a partial optional-dependency install). Fall back to the legacy CLI
+      // transport, which can still use a PATH-installed codex binary.
+      if (!codexSdkMissingNoticeShown) {
+        codexSdkMissingNoticeShown = true;
+        args.emit("notice", { message: "Codex SDK failed to start; using the codex CLI directly for this turn." });
+      }
+      return null;
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`codex: ${message.slice(0, 400)}`);
+  } finally {
+    await rm(work, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/* Splits the app's "provider/model" setting into the SDK's {providerID, modelID} shape. */
+export function mapOpenCodeModel(model: string): { providerID: string; modelID: string } | undefined {
+  const trimmed = model.trim();
+  if (!trimmed) return undefined;
+  const idx = trimmed.indexOf("/");
+  if (idx === -1) return undefined;
+  return { providerID: trimmed.slice(0, idx), modelID: trimmed.slice(idx + 1) };
+}
+
+export interface OpenCodeSdkTurnState {
+  assistantMessageId?: string;
+  answerPartId?: string;
+  sentText: string;
+}
+
+export interface MappedOpenCodeSdkEvent {
+  delta?: string;
+  done?: boolean;
+  error?: string;
+}
+
+/*
+ * Pure mapper from one shared-bus OpenCode server event (already filtered to this
+ * turn's session id by onOpenCodeSessionEvent) to the same {delta, done, error}
+ * shape mapCodexSdkEvent produces.
+ *
+ * Verified live against a real server (not assumed from types): the prompt's own
+ * echoed user message and the assistant's reasoning both arrive as
+ * message.part.updated/message.part.delta events too, so this tracks the
+ * assistant's message id explicitly (via message.updated with role "assistant")
+ * and, within that message, the specific text-typed part id (ignoring reasoning
+ * parts) before accepting any deltas — otherwise the user's own prompt or the
+ * model's chain-of-thought gets mistaken for the answer. message.part.delta
+ * (field:"text", partID, delta) is real on the wire but isn't in the published
+ * SDK's typed Event union; message.part.updated's cumulative part.text is used
+ * as a dedup-safe fallback/finalizer for it.
+ */
+export function mapOpenCodeSdkEvent(
+  ev: { type: string; properties?: any },
+  state: OpenCodeSdkTurnState
+): MappedOpenCodeSdkEvent {
+  const props = ev.properties ?? {};
+
+  if (ev.type === "message.updated" && props.info?.role === "assistant" && !state.assistantMessageId) {
+    state.assistantMessageId = props.info.id;
+    return {};
+  }
+
+  if (ev.type === "message.part.updated" && props.part?.messageID === state.assistantMessageId) {
+    if (props.part.type !== "text") return {};
+    if (!state.answerPartId) state.answerPartId = props.part.id;
+    if (props.part.id !== state.answerPartId) return {};
+    const full: string = props.part.text ?? "";
+    if (full.length <= state.sentText.length) return {};
+    const delta = full.slice(state.sentText.length);
+    state.sentText = full;
+    return { delta };
+  }
+
+  if (ev.type === "message.part.delta" && props.field === "text" && props.partID === state.answerPartId) {
+    const delta: string = props.delta ?? "";
+    if (!delta) return {};
+    state.sentText += delta;
+    return { delta };
+  }
+
+  if (ev.type === "session.idle") return { done: true };
+  if (ev.type === "session.error") {
+    const error = props.error;
+    const message = error?.data?.message ?? error?.name ?? "opencode session error";
+    return { error: message };
+  }
+  return {};
+}
+
+/* Emitted once per process if the optional OpenCode SDK dependency is missing. */
+let openCodeSdkMissingNoticeShown = false;
+const openCodeSdkSessionDirs = new Map<string, string>();
+
+export function openCodeResumeSessionId(
+  resume: string | undefined,
+  directory: string,
+  sessionDirs: ReadonlyMap<string, string> = openCodeSdkSessionDirs
+): string | undefined {
+  return resume && sessionDirs.get(resume) === directory ? resume : undefined;
+}
+
+/* Safety net for the "unset permission category hangs forever" and "server died
+ * mid-turn" risks documented in agent/opencode-server.ts — generous enough to
+ * never bother a real turn, but bounded so a turn can't hang indefinitely. */
+const OPENCODE_TURN_TIMEOUT_MS = 10 * 60 * 1000;
+
+/*
+ * Runs one OpenCode turn through @opencode-ai/sdk against the shared, lazily
+ * started `opencode serve` process (agent/opencode-server.ts). Every
+ * tool/permission category is denied server-side so the model never gets real
+ * filesystem access; prompt-injected context only, same as every other CLI
+ * engine. Unlike Codex, this reuses the server's one shared sandbox directory
+ * rather than a fresh temp dir per turn — see the directory note in
+ * agent/opencode-server.ts for why a fresh per-turn directory silently breaks
+ * event delivery on resumed sessions. Returns null (instead of throwing) when
+ * the optional SDK dependency isn't installed or the server can't start,
+ * signaling the caller to fall back to the legacy CLI transport.
+ */
+export async function runOpenCodeSdkTurn(args: CliArgs): Promise<string | null> {
+  let server: { baseUrl: string; client: any; sandboxDir: string };
+  try {
+    server = await ensureOpenCodeServer();
+  } catch {
+    if (!openCodeSdkMissingNoticeShown) {
+      openCodeSdkMissingNoticeShown = true;
+      args.emit("notice", { message: "OpenCode SDK not available; using the opencode CLI directly for this turn." });
+    }
+    return null;
+  }
+
+  const settings = args.settings;
+  const model = settings ? effectiveEngineModel(settings, "opencode") : "";
+  const reasoning = settings ? effectiveEngineReasoning(settings, "opencode") : "";
+  const prompt = withRuntimeHints(injectSkillsIntoPrompt(args.prompt, args.skills), reasoning);
+  const modelRef = mapOpenCodeModel(model);
+  const directory = server.sandboxDir;
+
+  args.emit("activity", { tool: "opencode", input: `${args.phase}…` });
+
+  let text = "";
+  let turnSessionId: string | undefined;
+  // Held on an object rather than bare `let`s: closures below reassign these, and
+  // narrowing bare `let`s reassigned inside a closure across an `await` boundary
+  // isn't reliable across TS versions (an object property sidesteps it cleanly).
+  const cleanup: { onAbort: (() => void) | null; unsubscribe: (() => void) | null; watchdog: ReturnType<typeof setTimeout> | null } = {
+    onAbort: null,
+    unsubscribe: null,
+    watchdog: null,
+  };
+
+  // Registered up front, before session creation, so an abort that fires while
+  // still awaiting session.create() (i.e. before turnSessionId even exists) isn't
+  // silently missed — addEventListener on an already-fired AbortSignal never
+  // calls the handler, so this must be listening for the entire turn lifetime,
+  // not just the later event-wait promise.
+  const aborted = new Promise<never>((_resolve, reject) => {
+    cleanup.onAbort = () => {
+      if (turnSessionId) server.client.session.abort({ path: { id: turnSessionId } }).catch(() => {});
+      reject(new Error("aborted"));
+    };
+    if (args.abort.signal.aborted) cleanup.onAbort();
+    else args.abort.signal.addEventListener("abort", cleanup.onAbort, { once: true });
+  });
+
+  try {
+    let sessionId = openCodeResumeSessionId(args.resume, directory);
+    if (!sessionId) {
+      const created = await Promise.race([server.client.session.create({ query: { directory } }), aborted]);
+      if (created.error) throw new Error(created.error?.data?.message ?? "failed to create opencode session");
+      sessionId = created.data.id as string;
+      openCodeSdkSessionDirs.set(sessionId, directory);
+      args.emit("session", { sessionId });
+    }
+    turnSessionId = sessionId;
+    const confirmedSessionId = sessionId;
+
+    const state: OpenCodeSdkTurnState = { sentText: "" };
+    const turnCompleted = new Promise<void>((resolve, reject) => {
+      cleanup.watchdog = setTimeout(() => {
+        server.client.session.abort({ path: { id: confirmedSessionId } }).catch(() => {});
+        reject(new Error("opencode turn timed out"));
+      }, OPENCODE_TURN_TIMEOUT_MS);
+
+      cleanup.unsubscribe = onOpenCodeSessionEvent(confirmedSessionId, (ev) => {
+        const mapped = mapOpenCodeSdkEvent(ev, state);
+        if (mapped.delta) {
+          text += mapped.delta;
+          if (!args.suppressText) args.emit("text", { phase: args.phase, delta: mapped.delta });
+        }
+        if (mapped.error) reject(new Error(mapped.error));
+        else if (mapped.done) resolve();
+      });
+
+      server.client.session
+        .promptAsync({
+          path: { id: confirmedSessionId },
+          query: { directory },
+          body: {
+            ...(modelRef ? { model: modelRef } : {}),
+            tools: OPENCODE_DISABLED_TOOLS,
+            parts: [{ type: "text", text: prompt }],
+          },
+        })
+        .then((res: any) => {
+          if (res?.error) reject(new Error(res.error?.data?.message ?? "opencode prompt request failed"));
+        })
+        .catch(reject);
+    });
+
+    await Promise.race([turnCompleted, aborted]);
+    return text.trim();
+  } catch (err) {
+    if (args.abort.signal.aborted) return text.trim();
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`opencode: ${message.slice(0, 400)}`);
+  } finally {
+    cleanup.unsubscribe?.();
+    if (cleanup.watchdog) clearTimeout(cleanup.watchdog);
+    if (cleanup.onAbort) args.abort.signal.removeEventListener("abort", cleanup.onAbort);
+  }
+}
+
 /*
  * Runs one external CLI in a sandboxed temporary directory.
  * Streams stdout chunks as text deltas, returns the full response, and throws on failure.
  */
 export async function runCliTurn(engine: Engine, args: CliArgs): Promise<string> {
+  if (engine === "codex" && process.env.VAULT_CODEX_TRANSPORT !== "cli") {
+    const sdkText = await runCodexSdkTurn(args);
+    if (sdkText !== null) return sdkText;
+    // SDK unavailable: fall through to the legacy CLI transport below.
+  }
+  if (engine === "opencode" && process.env.VAULT_OPENCODE_TRANSPORT !== "cli") {
+    const sdkText = await runOpenCodeSdkTurn(args);
+    if (sdkText !== null) return sdkText;
+    // SDK unavailable: fall through to the legacy CLI transport below.
+  }
+
   // buildCliCommand performs the portable skill injection before choosing this
   // engine's command line, so all CLI agents receive identical instructions.
   const { cmd, prompt, writeToStdin } = buildCliCommand(engine, args);

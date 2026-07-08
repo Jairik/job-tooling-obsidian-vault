@@ -113,6 +113,35 @@ export function cliPathForEngine(engine: Engine): string | undefined {
   return Bun.which(ENGINE_CLI_NAMES[engine]) ?? undefined;
 }
 
+/* Mirrors @openai/codex-sdk's native package lookup closely enough for availability checks. */
+export function codexSdkNativePackageName(platform = process.platform, arch = process.arch): string | undefined {
+  if (platform === "linux" || platform === "android") {
+    if (arch === "x64") return "@openai/codex-linux-x64";
+    if (arch === "arm64") return "@openai/codex-linux-arm64";
+  } else if (platform === "darwin") {
+    if (arch === "x64") return "@openai/codex-darwin-x64";
+    if (arch === "arm64") return "@openai/codex-darwin-arm64";
+  } else if (platform === "win32") {
+    if (arch === "x64") return "@openai/codex-win32-x64";
+    if (arch === "arm64") return "@openai/codex-win32-arm64";
+  }
+  return undefined;
+}
+
+/* Whether the optional Codex SDK dependency can satisfy a codex turn without a PATH binary. */
+export function codexSdkAvailable(): boolean {
+  if (process.env.VAULT_CODEX_TRANSPORT === "cli") return false;
+  const nativePackage = codexSdkNativePackageName();
+  if (!nativePackage) return false;
+  try {
+    Bun.resolveSync("@openai/codex-sdk", import.meta.dir);
+    Bun.resolveSync(`${nativePackage}/package.json`, import.meta.dir);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /* Converts the path scan and built-in command knowledge into UI-ready choices. */
 export function scanEngines(now = Date.now()): EngineScanResult {
   const entries = {} as EngineScanMap;
@@ -120,7 +149,7 @@ export function scanEngines(now = Date.now()): EngineScanResult {
   for (const engine of ENGINES) {
     const id = engine.id as Engine;
     const path = cliPathForEngine(id);
-    const available = id === "claude" || Boolean(path);
+    const available = id === "claude" || Boolean(path) || (id === "codex" && codexSdkAvailable());
 
     entries[id] = {
       id,

@@ -31,10 +31,11 @@ scanning. The current engine set includes:
 
 - Claude Code through the Claude Agent SDK.
 - Gemini Antigravity through the `agy` CLI. The settings engine id is `gemini`.
-- OpenCode.
+- OpenCode through `@opencode-ai/sdk` against a persistent `opencode serve` process
+  (CLI fallback via `VAULT_OPENCODE_TRANSPORT=cli`).
 - Cursor Agent.
 - GitHub Copilot.
-- Codex.
+- Codex through `@openai/codex-sdk` (CLI fallback via `VAULT_CODEX_TRANSPORT=cli`).
 
 The app can discover user/vault `SKILL.md` files, embed selected skills for every
 engine, run a humanize pass, use local BM25 retrieval, read attached documents,
@@ -64,9 +65,15 @@ processes.
   workflows.
 - `agent/config.ts` owns server defaults, prompt builders, engine metadata, and
   user-facing mode behavior.
-- `agent/cli-engines.ts` builds and runs non-Claude CLI commands. Keep prompts
-  off argv when they may be large, and preserve per-engine model/reasoning
-  behavior.
+- `agent/cli-engines.ts` builds and runs non-Claude CLI commands, and also
+  hosts the Codex `@openai/codex-sdk` transport (`runCodexSdkTurn`,
+  `mapCodexSdkEvent`) and the OpenCode `@opencode-ai/sdk` transport
+  (`runOpenCodeSdkTurn`, `mapOpenCodeSdkEvent`). Keep prompts off argv when they
+  may be large, and preserve per-engine model/reasoning behavior.
+- `agent/opencode-server.ts` owns the lazily started, persistent `opencode serve`
+  process behind the OpenCode SDK transport: server lifecycle, the deny-all
+  permission/tools config that keeps the model prompt-context-only, and the
+  shared event subscription fanned out per session id.
 - `agent/engine-scan.ts` detects local CLI availability, executable paths,
   models, and reasoning options.
 - `agent/skills.ts` discovers user and vault skills and creates new `SKILL.md`

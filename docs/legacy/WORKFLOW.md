@@ -10,11 +10,12 @@ Vault Assistant is a specialized web UI and backend system designed to harness v
 The core strength of the Assistant is its ability to interface with multiple AI CLI tools:
 - `Gemini Antigravity (agy)`
 - `Claude` (via SDK)
-- `OpenCode`
+- `OpenCode` (via `@opencode-ai/sdk` against a persistent `opencode serve` process, or the CLI directly)
 - `Cursor Agent`
 - `GitHub Copilot`
+- `Codex` (via `@openai/codex-sdk`, or the CLI directly)
 
-These engines are managed in `agent/gemini.ts`. The `runCliTurn` function is the unified executor that pipes standard input/output for any of the non-Claude agents. It automatically detects which tools are installed and available on the user's `PATH`.
+These engines are managed in `agent/cli-engines.ts`. The `runCliTurn` function is the unified executor that pipes standard input/output (or dispatches to a native SDK transport, for Codex and OpenCode) for any of the non-Claude agents. It automatically detects which tools are installed and available on the user's `PATH`.
 
 ### 2. UI and Styling
 The UI is built with React. It supports dynamic background themes (found in `src/components/FunBackground.tsx`) and CSS-driven layout management.
@@ -35,7 +36,7 @@ When you add a new feature (such as a new CLI engine, a new prompt builder, or m
 
 ### Adding a New CLI Engine
 1. Update the `engines` type/array in `src/lib/store.ts`.
-2. Add detection logic in `agent/gemini.ts` (`cliAvailable` function).
+2. Add detection logic in `agent/cli-engines.ts` (`cliAvailable` function).
 3. Ensure the unified `runCliTurn` executor can handle the new engine's I/O structure.
 4. **Update `agent/agent.test.ts`** to audit the new engine detection and execution logic.
 
