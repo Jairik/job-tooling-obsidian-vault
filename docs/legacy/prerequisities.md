@@ -21,16 +21,22 @@ manifests, launch scripts, documentation, and process-spawning code.
 
 ## Optional Engine CLIs
 
-These are required only when selecting the matching non-Claude engine. Each must
-be installed, authenticated with its provider, and available on `PATH`.
+These are required only when selecting the matching non-Claude engine. Most must
+be installed, authenticated with their provider, and available on `PATH`. Codex
+can run through the bundled SDK binary, or through `codex` on `PATH` when
+`VAULT_CODEX_TRANSPORT=cli` is set. OpenCode runs through `@opencode-ai/sdk`
+against a persistent `opencode serve` process it starts itself, or falls back to
+invoking `opencode` directly when `VAULT_OPENCODE_TRANSPORT=cli` is set; either
+way it still requires the `opencode` CLI on `PATH` (there is no bundled binary
+like Codex's).
 
-| Engine setting | Executable checked by the app |
+| Engine setting | Runtime checked by the app |
 | --- | --- |
-| Gemini Antigravity | `agy` |
-| OpenCode | `opencode` |
-| Cursor Agent | `cursor-agent` or `cursor` |
-| GitHub Copilot | `copilot` |
-| Codex | `codex` |
+| Gemini Antigravity | `agy` on `PATH` |
+| OpenCode | `opencode` on `PATH` (SDK or CLI) |
+| Cursor Agent | `cursor-agent` or `cursor` on `PATH` |
+| GitHub Copilot | `copilot` on `PATH` |
+| Codex | bundled SDK binary, or `codex` on `PATH` |
 
 OpenCode usage stats additionally call `opencode stats --days 7 --models 10`.
 Codex usage reads the local Codex auth state, or `CODEX_ACCESS_TOKEN` when set.

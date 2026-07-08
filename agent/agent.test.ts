@@ -2,12 +2,20 @@ import { describe, test, expect } from "bun:test";
 import {
   CLI_ARG_PROMPT_SOFT_LIMIT_BYTES,
   buildCliCommand,
+  buildCodexThreadOptions,
   cliAvailable,
   geminiAvailable,
   gatherVaultContext,
+  isCodexSdkStartupError,
+  mapCodexSdkEvent,
+  mapOpenCodeModel,
+  mapOpenCodeSdkEvent,
+  openCodeResumeSessionId,
   runCliTurn,
+  runCodexSdkTurn,
 } from "./cli-engines";
-import { ENGINE_CLI_NAMES, engineAvailabilityStatus, scanEngines } from "./engine-scan";
+import { openCodeEventSessionId } from "./opencode-server";
+import { ENGINE_CLI_NAMES, codexSdkAvailable, codexSdkNativePackageName, engineAvailabilityStatus, scanEngines } from "./engine-scan";
 import {
   buildCliAskPrompt,
   buildDraftPrompt,
@@ -1011,6 +1019,352 @@ Output tokens: 2,345
     const codexResumed = buildCliCommand("codex", { prompt: "PROMPT", settings, resume: "sess-789" });
     expect(codexResumed.cmd).toContain("resume");
     expect(codexResumed.cmd).toContain("sess-789");
+  });
+
+  test("buildCodexThreadOptions carries sandbox invariants plus optional model/reasoning", () => {
+    const bare = buildCodexThreadOptions("/tmp/jas-codex-xyz", "", "");
+    expect(bare).toEqual({
+      workingDirectory: "/tmp/jas-codex-xyz",
+      sandboxMode: "read-only",
+      skipGitRepoCheck: true,
+    });
+
+    const full = buildCodexThreadOptions("/tmp/jas-codex-xyz", "gpt-5.2-codex", "high");
+    expect(full).toEqual({
+      workingDirectory: "/tmp/jas-codex-xyz",
+      sandboxMode: "read-only",
+      skipGitRepoCheck: true,
+      model: "gpt-5.2-codex",
+      modelReasoningEffort: "high",
+    });
+  });
+
+  test("mapCodexSdkEvent maps SDK thread events to session/delta/error, mirroring the legacy JSONL parser", () => {
+    const state = { sentAgentText: "" };
+
+    // thread.started -> sessionId
+    expect(mapCodexSdkEvent({ type: "thread.started", thread_id: "thread-abc" }, state)).toEqual({
+      sessionId: "thread-abc",
+    });
+
+    // Unrelated/ignored events (parity with the legacy parser's silent-ignore behavior)
+    expect(mapCodexSdkEvent({ type: "turn.started" }, state)).toEqual({});
+    expect(mapCodexSdkEvent({ type: "item.started", item: { type: "command_execution" } }, state)).toEqual({});
+    expect(mapCodexSdkEvent({ type: "item.completed", item: { type: "reasoning", text: "thinking…" } }, state)).toEqual({});
+
+    // item.updated carries cumulative (not incremental) text -> mapper diffs against state to reconstruct a delta
+    expect(mapCodexSdkEvent({ type: "item.updated", item: { type: "agent_message", text: "Hel" } }, state)).toEqual({
+      delta: "Hel",
+    });
+    expect(mapCodexSdkEvent({ type: "item.updated", item: { type: "agent_message", text: "Hello wor" } }, state)).toEqual({
+      delta: "lo wor",
+    });
+
+    // item.completed with the same cumulative text as the last update must NOT double-count
+    expect(mapCodexSdkEvent({ type: "item.completed", item: { type: "agent_message", text: "Hello wor" } }, state)).toEqual(
+      {}
+    );
+
+    // item.completed that extends beyond the last update still yields the remaining delta
+    expect(mapCodexSdkEvent({ type: "item.completed", item: { type: "agent_message", text: "Hello world" } }, state)).toEqual(
+      { delta: "ld" }
+    );
+
+    // A turn that only ever emits item.completed (no prior updates) yields the full text as one delta
+    const freshState = { sentAgentText: "" };
+    expect(
+      mapCodexSdkEvent({ type: "item.completed", item: { type: "agent_message", text: "SUCCESS" } }, freshState)
+    ).toEqual({ delta: "SUCCESS" });
+
+    // Fatal error shapes
+    expect(mapCodexSdkEvent({ type: "error", message: "boom" }, state)).toEqual({ error: "boom" });
+    expect(mapCodexSdkEvent({ type: "turn.failed", error: { message: "rate limited" } }, state)).toEqual({
+      error: "rate limited",
+    });
+  });
+
+  test("runCliTurn respects VAULT_CODEX_TRANSPORT=cli as an escape hatch back to the legacy codex CLI path", async () => {
+    const { mock } = await import("bun:test");
+    const originalSpawn = Bun.spawn;
+    const originalTransport = process.env.VAULT_CODEX_TRANSPORT;
+    process.env.VAULT_CODEX_TRANSPORT = "cli";
+    try {
+      const mockSpawn = mock(() => {
+        return {
+          exited: Promise.resolve(0),
+          stdout: new ReadableStream({
+            start(controller) {
+              controller.enqueue(
+                new TextEncoder().encode(`${JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "SUCCESS" } })}\n`)
+              );
+              controller.close();
+            },
+          }),
+          stderr: new ReadableStream({
+            start(controller) {
+              controller.close();
+            },
+          }),
+        } as any;
+      });
+      Bun.spawn = mockSpawn;
+
+      const events: { event: string; data: any }[] = [];
+      const result = await runCliTurn("codex", {
+        prompt: "PROMPT",
+        phase: "test",
+        emit: (event, data) => events.push({ event, data }),
+        abort: new AbortController(),
+      });
+
+      expect(result).toBe("SUCCESS");
+      expect(mockSpawn.mock.calls.length).toBe(1);
+      const cmd = (mockSpawn.mock.calls as any)[0][0] as string[];
+      expect(cmd).toContain("exec");
+      expect(cmd).toContain("--sandbox");
+      expect(cmd).toContain("read-only");
+    } finally {
+      Bun.spawn = originalSpawn;
+      if (originalTransport === undefined) delete process.env.VAULT_CODEX_TRANSPORT;
+      else process.env.VAULT_CODEX_TRANSPORT = originalTransport;
+    }
+  });
+
+  test("cliAvailable(codex) reflects the SDK native binary even without a PATH binary, and respects the escape hatch", () => {
+    const originalWhich = Bun.which;
+    const originalResolveSync = Bun.resolveSync;
+    const originalTransport = process.env.VAULT_CODEX_TRANSPORT;
+    const nativePackage = codexSdkNativePackageName();
+    expect(nativePackage).toBeTruthy();
+    try {
+      (Bun as any).which = (name: string) => (name === "codex" ? null : originalWhich(name));
+      (Bun as any).resolveSync = (name: string, from: string) => {
+        if (name === "@openai/codex-sdk") return "/fake/codex-sdk/index.js";
+        if (nativePackage && name === `${nativePackage}/package.json`) return "/fake/codex-native/package.json";
+        return originalResolveSync(name, from);
+      };
+
+      delete process.env.VAULT_CODEX_TRANSPORT;
+      expect(cliAvailable("codex")).toBe(true);
+
+      process.env.VAULT_CODEX_TRANSPORT = "cli";
+      expect(cliAvailable("codex")).toBe(false);
+
+      delete process.env.VAULT_CODEX_TRANSPORT;
+      (Bun as any).resolveSync = (name: string, from: string) => {
+        if (name === "@openai/codex-sdk") return "/fake/codex-sdk/index.js";
+        if (nativePackage && name === `${nativePackage}/package.json`) throw new Error("missing native package");
+        return originalResolveSync(name, from);
+      };
+      expect(codexSdkAvailable()).toBe(false);
+      expect(cliAvailable("codex")).toBe(false);
+    } finally {
+      Bun.which = originalWhich;
+      Bun.resolveSync = originalResolveSync;
+      if (originalTransport === undefined) delete process.env.VAULT_CODEX_TRANSPORT;
+      else process.env.VAULT_CODEX_TRANSPORT = originalTransport;
+    }
+  });
+
+  test("Codex SDK fallback is limited to startup/native-binary failures", () => {
+    expect(isCodexSdkStartupError(new Error("Unable to locate Codex CLI binaries"))).toBe(true);
+    expect(isCodexSdkStartupError(new Error("Unsupported platform: freebsd (x64)"))).toBe(true);
+    expect(isCodexSdkStartupError(new Error("rate limited"))).toBe(false);
+    expect(isCodexSdkStartupError(new Error("401 Unauthorized"))).toBe(false);
+    expect(isCodexSdkStartupError(new Error("Unknown model gpt-nope"))).toBe(false);
+  });
+
+  test("runCodexSdkTurn falls back to the legacy CLI transport (returns null) when the SDK fails before streaming any text", async () => {
+    const { mock } = await import("bun:test");
+    mock.module("@openai/codex-sdk", () => ({
+      Codex: class {
+        constructor() {
+          throw new Error("Unable to locate Codex CLI binaries");
+        }
+      },
+    }));
+
+    const events: { event: string; data: any }[] = [];
+    const result = await runCodexSdkTurn({
+      prompt: "PROMPT",
+      phase: "test",
+      emit: (event, data) => events.push({ event, data }),
+      abort: new AbortController(),
+    });
+
+    expect(result).toBeNull();
+    const notices = events.filter((e) => e.event === "notice");
+    expect(notices.length).toBe(1);
+    expect(notices[0].data.message).toContain("Codex SDK failed to start");
+  });
+
+  test("mapOpenCodeModel splits the app's provider/model setting into the SDK's {providerID, modelID} shape", () => {
+    expect(mapOpenCodeModel("")).toBeUndefined();
+    expect(mapOpenCodeModel("   ")).toBeUndefined();
+    expect(mapOpenCodeModel("openai/gpt-5")).toEqual({ providerID: "openai", modelID: "gpt-5" });
+    expect(mapOpenCodeModel("anthropic/claude-sonnet-4-6")).toEqual({
+      providerID: "anthropic",
+      modelID: "claude-sonnet-4-6",
+    });
+    // A stray extra slash belongs to the model id, not a second split point.
+    expect(mapOpenCodeModel("openrouter/anthropic/claude-3")).toEqual({
+      providerID: "openrouter",
+      modelID: "anthropic/claude-3",
+    });
+    expect(mapOpenCodeModel("no-slash-here")).toBeUndefined();
+  });
+
+  test("OpenCode server event dispatch reads session ids from nested message payloads", () => {
+    expect(openCodeEventSessionId({ properties: { sessionID: "ses-top" } })).toBe("ses-top");
+    expect(openCodeEventSessionId({ properties: { info: { sessionID: "ses-message" } } })).toBe("ses-message");
+    expect(openCodeEventSessionId({ properties: { part: { sessionID: "ses-part" } } })).toBe("ses-part");
+    expect(openCodeEventSessionId({ properties: { info: { id: "msg-1" } } })).toBeUndefined();
+  });
+
+  test("OpenCode SDK resumes only sessions bound to the current server directory", () => {
+    const sessionDirs = new Map([
+      ["live-session", "/tmp/opencode-live"],
+      ["old-session", "/tmp/opencode-old"],
+    ]);
+
+    expect(openCodeResumeSessionId("live-session", "/tmp/opencode-live", sessionDirs)).toBe("live-session");
+    expect(openCodeResumeSessionId("old-session", "/tmp/opencode-live", sessionDirs)).toBeUndefined();
+    expect(openCodeResumeSessionId("persisted-after-restart", "/tmp/opencode-live", sessionDirs)).toBeUndefined();
+    expect(openCodeResumeSessionId(undefined, "/tmp/opencode-live", sessionDirs)).toBeUndefined();
+  });
+
+  test("mapOpenCodeSdkEvent maps shared-bus session events to delta/done/error, matching the real event order verified live against a running server", () => {
+    const state: { assistantMessageId?: string; answerPartId?: string; sentText: string } = { sentText: "" };
+
+    // Unrelated/ignored events
+    expect(mapOpenCodeSdkEvent({ type: "session.created", properties: {} }, state)).toEqual({});
+
+    // The user's own message.updated (echoing the prompt) must not be mistaken for the assistant.
+    expect(
+      mapOpenCodeSdkEvent({ type: "message.updated", properties: { info: { id: "msg-user", role: "user" } } }, state)
+    ).toEqual({});
+    // ...nor its echoed text part, even though it arrives as message.part.updated too.
+    expect(
+      mapOpenCodeSdkEvent(
+        { type: "message.part.updated", properties: { part: { type: "text", messageID: "msg-user", id: "prt-user", text: "prompt echo" } } },
+        state
+      )
+    ).toEqual({});
+
+    // The assistant message is identified by role, not by being "the next message seen".
+    expect(
+      mapOpenCodeSdkEvent({ type: "message.updated", properties: { info: { id: "msg-1", role: "assistant" } } }, state)
+    ).toEqual({});
+
+    // A reasoning part on the assistant message must not leak into the answer text,
+    // even though it fires message.part.delta events with field:"text" too.
+    expect(
+      mapOpenCodeSdkEvent(
+        { type: "message.part.updated", properties: { part: { type: "reasoning", messageID: "msg-1", id: "prt-reason", text: "" } } },
+        state
+      )
+    ).toEqual({});
+    expect(
+      mapOpenCodeSdkEvent(
+        { type: "message.part.delta", properties: { sessionID: "ses-1", messageID: "msg-1", partID: "prt-reason", field: "text", delta: "thinking…" } },
+        state
+      )
+    ).toEqual({});
+
+    // The answer's text part starts (empty, dedup-safe no-op) then streams via the
+    // untyped-but-real message.part.delta event, keyed by this specific part id.
+    expect(
+      mapOpenCodeSdkEvent(
+        { type: "message.part.updated", properties: { part: { type: "text", messageID: "msg-1", id: "prt-answer", text: "" } } },
+        state
+      )
+    ).toEqual({});
+    expect(
+      mapOpenCodeSdkEvent(
+        { type: "message.part.delta", properties: { sessionID: "ses-1", messageID: "msg-1", partID: "prt-answer", field: "text", delta: "Hel" } },
+        state
+      )
+    ).toEqual({ delta: "Hel" });
+    expect(
+      mapOpenCodeSdkEvent(
+        { type: "message.part.delta", properties: { sessionID: "ses-1", messageID: "msg-1", partID: "prt-answer", field: "text", delta: "lo" } },
+        state
+      )
+    ).toEqual({ delta: "lo" });
+
+    // The finalizing message.part.updated carries the same cumulative text the
+    // deltas already produced; diffing against sentText must not double-count it.
+    expect(
+      mapOpenCodeSdkEvent(
+        { type: "message.part.updated", properties: { part: { type: "text", messageID: "msg-1", id: "prt-answer", text: "Hello" } } },
+        state
+      )
+    ).toEqual({});
+
+    expect(mapOpenCodeSdkEvent({ type: "session.idle", properties: { sessionID: "ses-1" } }, state)).toEqual({
+      done: true,
+    });
+
+    const errorState = { sentText: "" };
+    expect(
+      mapOpenCodeSdkEvent(
+        { type: "session.error", properties: { error: { name: "ProviderAuthError", data: { message: "bad key" } } } },
+        errorState
+      )
+    ).toEqual({ error: "bad key" });
+    expect(
+      mapOpenCodeSdkEvent(
+        { type: "session.error", properties: { error: { name: "MessageOutputLengthError", data: {} } } },
+        errorState
+      )
+    ).toEqual({ error: "MessageOutputLengthError" });
+  });
+
+  test("runCliTurn respects VAULT_OPENCODE_TRANSPORT=cli as an escape hatch back to the legacy opencode CLI path", async () => {
+    const { mock } = await import("bun:test");
+    const originalSpawn = Bun.spawn;
+    const originalTransport = process.env.VAULT_OPENCODE_TRANSPORT;
+    process.env.VAULT_OPENCODE_TRANSPORT = "cli";
+    try {
+      const mockSpawn = mock(() => {
+        return {
+          exited: Promise.resolve(0),
+          stdout: new ReadableStream({
+            start(controller) {
+              controller.enqueue(
+                new TextEncoder().encode(`${JSON.stringify({ sessionID: "sess-legacy", type: "text", part: { text: "SUCCESS" } })}\n`)
+              );
+              controller.close();
+            },
+          }),
+          stderr: new ReadableStream({
+            start(controller) {
+              controller.close();
+            },
+          }),
+        } as any;
+      });
+      Bun.spawn = mockSpawn;
+
+      const events: { event: string; data: any }[] = [];
+      const result = await runCliTurn("opencode", {
+        prompt: "PROMPT",
+        phase: "test",
+        emit: (event, data) => events.push({ event, data }),
+        abort: new AbortController(),
+      });
+
+      expect(result).toBe("SUCCESS");
+      expect(mockSpawn.mock.calls.length).toBe(1);
+      const cmd = (mockSpawn.mock.calls as any)[0][0] as string[];
+      expect(cmd).toContain("run");
+      expect(cmd).toContain("--pure");
+      expect(events.some((e) => e.event === "session" && e.data.sessionId === "sess-legacy")).toBe(true);
+    } finally {
+      Bun.spawn = originalSpawn;
+      if (originalTransport === undefined) delete process.env.VAULT_OPENCODE_TRANSPORT;
+      else process.env.VAULT_OPENCODE_TRANSPORT = originalTransport;
+    }
   });
 
   test("CLI command builder transports current long prompts safely", () => {

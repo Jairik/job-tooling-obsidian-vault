@@ -88,6 +88,7 @@ const config = {
           {
             href: 'https://github.com/Jairik/vault-assistant',
             position: 'right',
+            label: 'GitHub',
             className: 'navbar-github-link',
             'aria-label': 'GitHub repository',
           },
