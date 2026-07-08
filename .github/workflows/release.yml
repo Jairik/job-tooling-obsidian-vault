@@ -115,6 +115,12 @@ jobs:
             patchelf \
             libssl-dev \
             libgtk-3-dev
+          # linuxdeploy/appimagetool are classic FUSE2 AppImages. The
+          # APPIMAGE_EXTRACT_AND_RUN in the Build AppImage step should make this
+          # unnecessary, but install FUSE2 too so the FUSE-mount path also works.
+          # ubuntu-24.04 renamed the package to libfuse2t64; fall back to
+          # libfuse2 for older/other runner images.
+          sudo apt-get install -y libfuse2t64 || sudo apt-get install -y libfuse2
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -176,7 +182,11 @@ jobs:
         env:
           PATCHELF: /usr/bin/patchelf
           NO_STRIP: "true"
-        run: bunx tauri build --bundles appimage
+          # ubuntu-latest (24.04) has no libfuse2, so linuxdeploy, its plugins,
+          # and appimagetool — all classic FUSE-mounted AppImages — can't run.
+          # Self-extract instead, matching repair-appimage.sh's extract-and-run.
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: bunx tauri build --verbose --bundles appimage
 
       - name: Repair and verify AppImage
         if: runner.os == 'Linux'

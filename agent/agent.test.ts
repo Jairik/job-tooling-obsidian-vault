@@ -1566,7 +1566,7 @@ Output tokens: 2,345
     // AppImage: built with the system patchelf so bundling completes, then
     // repaired (pristine bun sidecar + resources restored) before upload.
     expect(workflow).toContain("PATCHELF: /usr/bin/patchelf");
-    expect(workflow).toContain("bunx tauri build --bundles appimage");
+    expect(workflow).toContain("bunx tauri build --verbose --bundles appimage");
     expect(workflow).toContain("repair-appimage.sh");
     expect(workflow).toContain("gh release upload");
     expect(workflow).toContain("--clobber");
