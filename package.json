@@ -51,7 +51,7 @@
     "unpdf": "^1.6.2"
   },
   "optionalDependencies": {
-    "@openai/codex-sdk": "^0.142.5",
+    "@openai/codex-sdk": "^0.144.0",
     "@opencode-ai/sdk": "^1.17.15"
   },
   "devDependencies": {
