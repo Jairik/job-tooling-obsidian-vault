@@ -52,7 +52,7 @@
   },
   "optionalDependencies": {
     "@openai/codex-sdk": "^0.142.5",
-    "@opencode-ai/sdk": "^1.17.15"
+    "@opencode-ai/sdk": "^1.17.17"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
