@@ -7,6 +7,8 @@ title: Settings panel features
 
 The settings panel allows you to customize default models, vault directories, persona prompts, visual themes, and custom skills. Clicking the gear icon (**⚙**) in the top right header opens the drawer.
 
+![The settings drawer on the General page](/img/screenshots/settings-general.png)
+
 ---
 
 ## Left navigation pages
@@ -87,6 +89,8 @@ flowchart TD
 ```
 
 ### Appearance page
+
+![The Appearance settings page](/img/screenshots/settings-appearance.png)
 
 Tweak the design system layout and variables:
 - **Theme selectors:** Toggle dark or light modes.

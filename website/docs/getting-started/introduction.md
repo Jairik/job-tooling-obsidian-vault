@@ -5,7 +5,7 @@ title: Introduction
 
 # Introduction
 
-Vault Assistant is a local application that drafts grounded, natural text based on files in your Obsidian vault. The application serves both a React web interface and a terminal interface (TUI) from a single Bun process.
+Vault Assistant is a local application that drafts grounded, natural text based on files in your Obsidian vault. A single Bun process serves a React web interface and a terminal interface (TUI), and an optional desktop app wraps the web interface in a native window.
 
 ## What it does
 
@@ -24,22 +24,19 @@ Each session or tab in the interface acts as an independent conversation. You ca
 - **RAG mode for token savings:** You can switch on RAG (Retrieval-Augmented Generation) for any tab. When RAG is active, the system indexes your vault and sends only the most relevant excerpts to the model rather than reading the entire vault.
 - **Local privacy:** Your vault contents never leave your machine. The application runs local CLI models or uses your existing Claude Code credentials directly.
 
+## Three ways to use it
+
+One backend serves three frontends. The [web interface](../interfaces/web-app.md) is the default and has every feature, including tabs, split view, and quick notes. The [desktop app](../interfaces/desktop-app.md) wraps that same interface in a native window with a bundled runtime. The [terminal interface](../interfaces/tui.md) covers the core workflow from a shell, with a few of the visual features left out.
+
 ## Quick start
 
-To start the default web application and API server:
+The fastest route is the npm package:
 
 ```bash
-./run.sh
+npm install -g @jairik/vault-assistant
+vault-assistant
 ```
 
-To run the server with hot reloading enabled for development:
+Then open the printed URL, `http://localhost:5173` by default. Add `--tui` for the terminal interface. The [Installation](installation.md) page covers this route in detail, plus the desktop app download and running from source.
 
-```bash
-bun run dev
-```
-
-To run the terminal interface:
-
-```bash
-bun run tui
-```
+From a source checkout, `./run.sh` starts the same server (`bun run dev` for hot reloading, `bun run tui` for the terminal interface).

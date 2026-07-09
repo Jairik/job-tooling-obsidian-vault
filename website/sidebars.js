@@ -7,13 +7,23 @@ const sidebars = {
     {
       type: 'category',
       label: 'Getting Started',
-      items: ['getting-started/introduction', 'getting-started/prerequisites'],
+      items: [
+        'getting-started/introduction',
+        'getting-started/installation',
+        'getting-started/prerequisites',
+      ],
+    },
+    {
+      type: 'category',
+      label: 'Interfaces',
+      items: ['interfaces/web-app', 'interfaces/desktop-app', 'interfaces/tui'],
     },
     {
       type: 'category',
       label: 'Features',
       items: [
-        'features/ask-and-draft',
+        'features/ask-mode',
+        'features/draft-mode',
         'features/write-vault',
         'features/rag',
         'features/web-research',

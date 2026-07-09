@@ -20,6 +20,8 @@ Every file write in the application goes through the approval flow:
 5. **Approve button:** Click this button in the modal to finalize the write. The browser sends the new content and the security token to `POST /api/vault/write`. The server checks the token, writes the file to disk, and deletes the token to prevent reuse.
 6. **Cancel / Close button:** Click this button or press `Esc` to close the modal. This releases the token without modifying the file.
 
+![The approval modal previewing a new file before it is written](/img/screenshots/write-approval.png)
+
 ```mermaid
 sequenceDiagram
     participant User as User UI
