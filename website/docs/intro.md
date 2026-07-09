@@ -12,11 +12,19 @@ Welcome to the Vault Assistant documentation. This guide details how the applica
 ## Getting started
 
 - [Introduction](getting-started/introduction.md) : Overview of the project, capabilities, and quick startup.
-- [System prerequisites](getting-started/prerequisites.md) : Required tools, optional engine CLIs, and Tauri desktop compilation.
+- [Installation](getting-started/installation.md) : Installing from npm, downloading the desktop app, or running from source.
+- [System prerequisites](getting-started/prerequisites.md) : Required tools, optional engine CLIs, and desktop build dependencies.
+
+## Interfaces
+
+- [Web interface](interfaces/web-app.md) : The default frontend, with tabs, split view, quick notes, and keyboard shortcuts.
+- [Desktop app (Tauri)](interfaces/desktop-app.md) : The same interface in a native window, with a bundled runtime.
+- [Terminal interface (TUI)](interfaces/tui.md) : The full workflow from a terminal, and how it differs from the web interface.
 
 ## Application features
 
-- [Ask and drafting modes](features/ask-and-draft.md) : Creating answers, toggling LaTeX formatting, and attaching context documents.
+- [Ask mode](features/ask-mode.md) : Asking grounded questions, generation toggles, and the answer area.
+- [Draft mode](features/draft-mode.md) : Drafting first-person text from a job description and attached documents.
 - [Write to vault](features/write-vault.md) : Auto-placing notes, scanning vault gaps, proposing document writes, and the write approval flow.
 - [RAG retrieval](features/rag.md) : Local BM25 indexing, token optimization, and context selection.
 - [Local web research](features/web-research.md) : Integrating SearXNG, crawler resolution modes, and IP security checks.

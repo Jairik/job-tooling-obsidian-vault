@@ -5,7 +5,7 @@ title: System prerequisites
 
 # System prerequisites
 
-This page lists the system dependencies required to install, build, and run the Vault Assistant.
+This page lists the system dependencies required to install, build, and run the Vault Assistant. For the install commands themselves, start at [Installation](installation.md).
 
 ## Core requirements
 
@@ -49,20 +49,10 @@ _Note: OpenCode usage statistics require `opencode stats`. Codex usage reads the
 
 ## Desktop application requirements (Tauri)
 
-Building the optional desktop shell requires:
+These only apply when building the desktop shell from source. The packaged downloads from [GitHub Releases](https://github.com/Jairik/vault-assistant/releases/latest) need none of them, and bundle their own Bun runtime.
 
 1. **Rust toolchain:** Install `rustc` and `cargo` using [rustup](https://rustup.rs).
 2. **System libraries (Linux):** Install `webkit2gtk-4.1`, `gtk3`, and `libsoup-3.0` using your package manager.
 3. **The Tauri CLI:** Run `bun install` to set up `@tauri-apps/cli`.
 
-To start the desktop application in development mode:
-
-```bash
-bun run desktop
-```
-
-To compile the application package:
-
-```bash
-bun run desktop:build
-```
+The build commands are covered in [Installation](installation.md#option-3-from-source).

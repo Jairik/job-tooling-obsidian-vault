@@ -13,6 +13,12 @@ Retrieval-Augmented Generation (RAG) sends only the relevant slices of your vaul
 - **RAG status chip:** When RAG is active for a generation, a **RAG** chip appears in the status bar at the bottom of the window.
 - **Context activity log:** When the model finishes generating, the **Context activity** panel lists the exact files and headings retrieved from your vault.
 
+![An answer generated with RAG, with the context activity panel listing the retrieved files](/img/screenshots/ask-answer.png)
+
+The retrieval defaults live on the RAG / Retrieval page in Settings:
+
+![The RAG / Retrieval settings page](/img/screenshots/settings-retrieval.png)
+
 ---
 
 ## Low-level mechanisms

@@ -120,7 +120,7 @@
         <a href="https://github.com/Jairik/vault-assistant" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:9px;padding:14px 24px;border-radius:11px;border:1px solid var(--border2);background:var(--surface);color:var(--text);text-decoration:none;font-weight:600;font-size:16px">View Source</a>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:22px;justify-content:center;margin-top:32px;font-family:'JetBrains Mono',monospace;font-size:12.5px;color:var(--faint)">
-        <span>▹ Built on Bun</span><span>▹ Claude Code · Codex</span><span>▹ Zero-dependency RAG</span><span>▹ MIT licensed</span>
+        <span>▹ Built on Bun</span><span>▹ Claude Code · Codex</span><span>▹ Web · Desktop · TUI</span><span>▹ Zero-dependency RAG</span><span>▹ MIT licensed</span>
       </div>
     </div>
   </header>
@@ -350,7 +350,7 @@
             <div id="dsSplitWrap" style="display:none">
             <div style="border-radius:14px;border:1px solid var(--border);background:color-mix(in oklch,var(--surface) 82%,transparent);backdrop-filter:blur(8px);overflow:hidden">
               <div style="display:flex;align-items:center;gap:8px;padding:var(--dpad);border-bottom:1px solid var(--border)"><span style="width:8px;height:8px;border-radius:50%;background:oklch(0.72 0.16 155)"></span><span style="font-size:13px;font-weight:600">onboarding notes</span><span style="margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:10.5px;padding:2px 7px;border-radius:999px;background:var(--surface2);color:var(--muted);border:1px solid var(--border)">split</span></div>
-              <div style="padding:var(--dpad);display:flex;flex-direction:column;gap:var(--dgap)"><div style="align-self:flex-end;max-width:80%;padding:9px 12px;border-radius:12px 12px 3px 12px;background:linear-gradient(180deg,var(--accent),var(--accent2));color:var(--accent-ink);font-size:13px">Summarize week-one setup.</div><div style="align-self:flex-start;max-width:88%;padding:9px 12px;border-radius:12px 12px 12px 3px;background:var(--surface2);border:1px solid var(--border);font-size:13px;line-height:1.5">Clone the repo, install Bun, run ./run.sh, and log in with Claude Code.</div></div>
+              <div style="padding:var(--dpad);display:flex;flex-direction:column;gap:var(--dgap)"><div style="align-self:flex-end;max-width:80%;padding:9px 12px;border-radius:12px 12px 3px 12px;background:linear-gradient(180deg,var(--accent),var(--accent2));color:var(--accent-ink);font-size:13px">Summarize week-one setup.</div><div style="align-self:flex-start;max-width:88%;padding:9px 12px;border-radius:12px 12px 12px 3px;background:var(--surface2);border:1px solid var(--border);font-size:13px;line-height:1.5">Install it with npm, run vault-assistant, and sign in with Claude Code.</div></div>
             </div>
             </div><!--/dssplit-->
           </div>
@@ -379,19 +379,36 @@
         <div style="font-family:'JetBrains Mono',monospace;font-size:12.5px;color:var(--accent);letter-spacing:.08em;text-transform:uppercase;margin-bottom:12px">Quickstart</div>
         <h2 style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:clamp(28px,4vw,42px);letter-spacing:-.02em;margin:0">Running in under a minute</h2>
       </div>
+      <div data-reveal style="display:flex;justify-content:center;margin-bottom:14px">
+        <div style="display:inline-flex;padding:4px;border-radius:11px;border:1px solid var(--border);background:var(--surface);gap:4px">
+          <button id="inst_npm" data-inst="npm" style="font-size:13px;padding:6px 13px;border-radius:8px;border:none;cursor:pointer;font-weight:500;background:var(--accent);color:var(--accent-ink)">npm</button>
+          <button id="inst_dl" data-inst="dl" style="font-size:13px;padding:6px 13px;border-radius:8px;border:none;cursor:pointer;font-weight:500;background:transparent;color:var(--muted)">Download</button>
+          <button id="inst_src" data-inst="src" style="font-size:13px;padding:6px 13px;border-radius:8px;border:none;cursor:pointer;font-weight:500;background:transparent;color:var(--muted)">From source</button>
+        </div>
+      </div>
       <div data-reveal style="border-radius:14px;border:1px solid var(--border2);background:var(--bg2);overflow:hidden;box-shadow:0 30px 80px -50px var(--glow)">
         <div style="display:flex;align-items:center;gap:8px;padding:11px 15px;border-bottom:1px solid var(--border);font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--faint)">
           <span style="width:10px;height:10px;border-radius:50%;background:oklch(0.68 0.17 25)"></span><span style="width:10px;height:10px;border-radius:50%;background:oklch(0.82 0.14 90)"></span><span style="width:10px;height:10px;border-radius:50%;background:oklch(0.75 0.16 145)"></span>
-          <span style="margin-left:6px">terminal · bash</span>
+          <span id="termLabel" style="margin-left:6px">terminal · bash</span>
           <button id="copyBtn" style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:8px;border:1px solid var(--border2);background:var(--surface);color:var(--text);cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:12px"><span id="copyLabel">copy</span></button>
         </div>
-        <pre style="margin:0;padding:20px;font-family:'JetBrains Mono',monospace;font-size:13.5px;line-height:1.9;color:var(--text);overflow-x:auto"><span style="color:var(--faint)"># clone &amp; run</span>
+        <pre id="instPane_npm" style="margin:0;padding:20px;font-family:'JetBrains Mono',monospace;font-size:13.5px;line-height:1.9;color:var(--text);overflow-x:auto"><span style="color:var(--faint)"># install once, run anywhere</span>
+<span style="color:var(--accent)">npm</span> install -g @jairik/vault-assistant
+<span style="color:var(--accent)">vault-assistant</span>
+<span style="color:var(--faint)"># terminal UI: vault-assistant --tui · then open http://localhost:5173</span></pre>
+        <div id="instPane_dl" style="display:none;padding:24px 20px">
+          <p style="margin:0 0 16px;font-size:14.5px;line-height:1.65;color:var(--muted)">The desktop app is the same interface in its own window. It bundles its own runtime, so you skip the terminal entirely; sign in with Claude Code and you're set.</p>
+          <a href="https://github.com/Jairik/vault-assistant/releases/latest" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:9px;padding:12px 20px;border-radius:11px;background:linear-gradient(180deg,var(--accent),var(--accent2));color:var(--accent-ink);text-decoration:none;font-weight:600;font-size:14.5px">Download from GitHub Releases <span style="font-family:'JetBrains Mono',monospace">→</span></a>
+          <div style="margin-top:14px;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--faint)">.deb / .rpm for Linux · macOS coming soon</div>
+        </div>
+        <pre id="instPane_src" style="display:none;margin:0;padding:20px;font-family:'JetBrains Mono',monospace;font-size:13.5px;line-height:1.9;color:var(--text);overflow-x:auto"><span style="color:var(--faint)"># clone &amp; run</span>
 <span style="color:var(--accent)">git</span> clone https://github.com/Jairik/vault-assistant.git
 <span style="color:var(--accent)">cd</span> vault-assistant
 <span style="color:var(--accent)">./run.sh</span></pre>
       </div>
-      <div data-reveal class="grid2" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px">
-        <div style="padding:16px 18px;border-radius:12px;border:1px solid var(--border);background:var(--surface)"><div style="font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--accent);margin-bottom:6px">REQUIREMENTS</div><div style="font-size:14px;line-height:1.7;color:var(--muted)">Bun 1.3+ · Claude Code CLI logged in</div></div>
+      <div data-reveal class="grid2" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:16px">
+        <div style="padding:16px 18px;border-radius:12px;border:1px solid var(--border);background:var(--surface)"><div style="font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--accent);margin-bottom:6px">REQUIREMENTS</div><div style="font-size:14px;line-height:1.7;color:var(--muted)">Bun 1.3+ · Claude Code CLI logged in · macOS / Linux</div></div>
+        <div style="padding:16px 18px;border-radius:12px;border:1px solid var(--border);background:var(--surface)"><div style="font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--accent);margin-bottom:6px">INTERFACES</div><div style="font-size:14px;line-height:1.7;color:var(--muted)"><a href="docs/interfaces/web-app/" style="color:var(--muted)">Web UI</a> (default) · <a href="docs/interfaces/desktop-app/" style="color:var(--muted)">Desktop app</a> · <a href="docs/interfaces/tui/" style="color:var(--muted)">TUI</a></div></div>
         <div style="padding:16px 18px;border-radius:12px;border:1px solid var(--border);background:var(--surface)"><div style="font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--accent);margin-bottom:6px">CONFIG</div><div style="font-size:14px;line-height:1.7;color:var(--muted)">Local and gitignored. Nothing leaves your box.</div></div>
       </div>
     </div>
@@ -405,7 +422,7 @@
         <p style="margin:0;font-size:13.5px;line-height:1.6;color:var(--faint);max-width:320px">Free, open-source, local-first AI research for your Obsidian vault.</p>
       </div>
       <div style="display:flex;gap:56px;flex-wrap:wrap">
-        <div style="display:flex;flex-direction:column;gap:9px"><div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--faint);letter-spacing:.06em;text-transform:uppercase;margin-bottom:3px">Project</div><a href="https://github.com/Jairik/vault-assistant" target="_blank" rel="noopener" style="font-size:14px;color:var(--muted);text-decoration:none">Source code</a><a href="https://github.com/Jairik/vault-assistant#readme" target="_blank" rel="noopener" style="font-size:14px;color:var(--muted);text-decoration:none">Documentation</a><a href="https://github.com/Jairik/vault-assistant/blob/main/LICENSE" target="_blank" rel="noopener" style="font-size:14px;color:var(--muted);text-decoration:none">License &amp; credits</a></div>
+        <div style="display:flex;flex-direction:column;gap:9px"><div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--faint);letter-spacing:.06em;text-transform:uppercase;margin-bottom:3px">Project</div><a href="https://github.com/Jairik/vault-assistant" target="_blank" rel="noopener" style="font-size:14px;color:var(--muted);text-decoration:none">Source code</a><a href="docs/" style="font-size:14px;color:var(--muted);text-decoration:none">Documentation</a><a href="https://github.com/Jairik/vault-assistant/blob/main/LICENSE" target="_blank" rel="noopener" style="font-size:14px;color:var(--muted);text-decoration:none">License &amp; credits</a></div>
         <div style="display:flex;flex-direction:column;gap:9px"><div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--faint);letter-spacing:.06em;text-transform:uppercase;margin-bottom:3px">Page</div><a href="#features" style="font-size:14px;color:var(--muted);text-decoration:none">Features</a><a href="#how" style="font-size:14px;color:var(--muted);text-decoration:none">How it works</a><a href="#install" style="font-size:14px;color:var(--muted);text-decoration:none">Quickstart</a></div>
       </div>
     </div>
@@ -452,10 +469,28 @@
     logo.addEventListener('pointercancel', endDrag);
   }
 
-  /* ---- copy install ---- */
+  /* ---- install tabs + copy ---- */
+  var instTab = 'npm';
+  var instText = {
+    npm: "npm install -g @jairik/vault-assistant\nvault-assistant",
+    src: "git clone https://github.com/Jairik/vault-assistant.git\ncd vault-assistant\n./run.sh"
+  };
+  function instPill(a){ return "font-size:13px;padding:6px 13px;border-radius:8px;border:none;cursor:pointer;font-weight:500;background:"+(a?'var(--accent)':'transparent')+";color:"+(a?'var(--accent-ink)':'var(--muted)'); }
+  function instRestyle(){
+    ['npm','dl','src'].forEach(function(v){
+      var b = document.getElementById('inst_'+v); if(b) b.style.cssText = instPill(instTab===v);
+      var p = document.getElementById('instPane_'+v); if(p) p.style.display = instTab===v ? '' : 'none';
+    });
+    var cb = document.getElementById('copyBtn'); if(cb) cb.style.display = instTab==='dl' ? 'none' : '';
+    var tl = document.getElementById('termLabel'); if(tl) tl.textContent = instTab==='dl' ? 'desktop · downloads' : 'terminal · bash';
+  }
+  document.querySelectorAll('[data-inst]').forEach(function(b){
+    b.addEventListener('click', function(){ instTab = b.dataset.inst; instRestyle(); });
+  });
+  instRestyle();
   var copyBtn = document.getElementById('copyBtn');
   if (copyBtn) copyBtn.addEventListener('click', function(){
-    var text = "git clone https://github.com/Jairik/vault-assistant.git\ncd vault-assistant\n./run.sh";
+    var text = instText[instTab] || instText.npm;
     try { navigator.clipboard.writeText(text); } catch(_){}
     var l = document.getElementById('copyLabel'); l.textContent='✓ copied';
     setTimeout(function(){ l.textContent='copy'; }, 1800);
